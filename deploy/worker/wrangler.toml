@@ -6,7 +6,7 @@ compatibility_date = "2026-11-01"
 # The route takes over dialectic.yaggy.dev from the hackathon droplet: deploy it only once the
 # MicroVM is up (README.md, "Going live"). Until then, deploy with `--no-routes`... or leave this
 # commented out and test on the workers.dev URL.
-# routes = [{ pattern = "dialectic.yaggy.dev/*", zone_name = "yaggy.dev" }]
+routes = [{ pattern = "dialectic.yaggy.dev/*", zone_name = "yaggy.dev" }]
 
 kv_namespaces = [{ binding = "STATE", id = "9a2a84276e6b4c4f86601eb7d1f36998" }]
 
