@@ -56,6 +56,7 @@ start() {
   ( cd "$BACKEND" && PYTHONPATH=/app/deploy/microvm exec "$PY" -m uvicorn guard:app \
       --host 0.0.0.0 --port "$PORT" ) >> "$LOG" 2>&1 &
   pid=$!
+  echo "$pid" > "$STATE/uvicorn.pid"  # restart the app: kill $(cat /var/lib/dialectic/uvicorn.pid)
   say "uvicorn started (pid $pid, port $PORT)"
 }
 

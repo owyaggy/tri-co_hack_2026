@@ -47,5 +47,5 @@ The daily reseed (or one that's overdue when the VM resumes) waits for `RESEED_Q
 
 - Log: `/var/lib/dialectic/uvicorn.log` (the previous day's in `uvicorn.log.1`), e.g. `doctl compute microvm exec <id> -- tail -50 /var/lib/dialectic/uvicorn.log`.
 - Image version: `/var/lib/dialectic/image-version` and `/version.txt`.
-- Restart the app (to pick up a changed env file, for example): `doctl compute microvm exec <id> -- pkill -f uvicorn`. The entrypoint starts it again within 30 s.
+- Restart the app (to pick up a changed env file, for example): `doctl compute microvm exec <id> -- sh -c 'kill $(cat /var/lib/dialectic/uvicorn.pid)'` (the image has no `pkill`). The entrypoint starts it again within 30 s.
 - Spending: `GET /api/spend`.
