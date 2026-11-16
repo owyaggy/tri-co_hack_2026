@@ -16,7 +16,7 @@
 # "is the last reseed older than RESEED_HOURS?", made every 30 s and right after a
 # resume. It waits until nothing has been logged for RESEED_QUIET_SECONDS, so it
 # doesn't cut off the visitor whose request just woke the VM. While it runs
-# (a few seconds) the port is closed.
+# (about 30 s, measured) the port is closed.
 set -u
 
 STATE=/var/lib/dialectic
@@ -48,6 +48,10 @@ export PORT DO_INFERENCE_URL DO_MODEL AI_OFF UPLOADS_ENABLED DEVICE_ASKS_PER_HOU
 pid=
 
 start() {
+  # Read again on every start, so an edited env file takes effect on the next restart.
+  if [ -f "$STATE/env" ]; then
+    set -a; . "$STATE/env"; set +a
+  fi
   # guard.py wraps main:app and refuses what Caddy refused on the droplet.
   ( cd "$BACKEND" && PYTHONPATH=/app/deploy/microvm exec "$PY" -m uvicorn guard:app \
       --host 0.0.0.0 --port "$PORT" ) >> "$LOG" 2>&1 &
@@ -83,7 +87,7 @@ trap 'say "stopping"; stop; exit 0' TERM INT
 start
 
 while :; do
-  sleep 30
+  sleep 30 & wait $!  # in the background, so a TERM is handled at once
   if ! kill -0 "$pid" 2>/dev/null; then
     say "uvicorn exited; restarting"
     sleep 2
