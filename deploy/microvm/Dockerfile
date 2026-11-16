@@ -29,7 +29,8 @@ COPY app/backend/pyproject.toml app/backend/uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
 COPY app/backend/ ./
 COPY --from=frontend /src/dist /app/app/frontend/dist
-COPY seed.db /app/seed.db
+# --chmod: build.sh's copy is mode 600 (it's kept private on the laptop).
+COPY --chmod=644 seed.db /app/seed.db
 COPY deploy/microvm/entrypoint.sh deploy/microvm/guard.py /app/deploy/microvm/
 
 # Runs as `dialectic`, not root (and `doctl ... exec` runs as this user too).

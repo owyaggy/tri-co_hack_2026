@@ -63,9 +63,11 @@ stop() {
 }
 
 reseed() {
-  if [ ! -f "$DB" ]; then
+  # Never reseeded yet (first boot, or every try so far failed): start from the
+  # prepared database, even if the app has already created an empty one.
+  if [ ! -f "$STAMP" ]; then
     say "first boot: starting from the prepared database"
-    cp /app/seed.db "$DB"
+    cp /app/seed.db "$DB" 2>> "$LOG" || { say "can't copy /app/seed.db: NOT seeding (it would lose web_cache and spend)"; return 1; }
   fi
   if ( cd "$BACKEND" && "$PY" seed.py --reset --with-reading ) >> "$LOG" 2>&1; then
     date +%s > "$STAMP"
