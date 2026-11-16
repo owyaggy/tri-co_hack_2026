@@ -12,7 +12,7 @@ This setup lives only in Owen's fork, [`owyaggy/tri-co_hack_2026`](https://githu
 | --- | --- | --- |
 | **Public link** | `https://yag.gy/dia` | A 302 redirect (Cloudflare redirect rule on `yag.gy`) to `https://dialectic.yaggy.dev/` |
 | **Front door** | Cloudflare Worker `dialectic-front-door`, route `dialectic.yaggy.dev/*` | A "Start the demo" page behind Turnstile; passing it gives a 4-hour pass (signed cookie). Requests with a pass go to the VM. Spending guards and phone alerts (below) |
-| **The app** | MicroVM `dialectic-demo-2` in the **Dialectic** DigitalOcean team, region `mkc1`, 1 vCPU / 2 GiB | The image `ghcr.io/owyaggy/dialectic:sha-…` (public): FastAPI serving the API and the built frontend, with its own database on the VM's disk. Pauses after 15 idle minutes; the next request resumes it in about a second |
+| **The app** | MicroVM `dialectic-demo-3` in the **Dialectic** DigitalOcean team, region `mkc1`, 1 vCPU / 2 GiB | The image `ghcr.io/owyaggy/dialectic:sha-…` (public): FastAPI serving the API and the built frontend, with its own database on the VM's disk. Pauses after 15 idle minutes; the next request resumes it in about a second |
 
 A request: browser → Cloudflare → the Worker (no pass: the Start page, or a 401 for API calls) → the VM's DigitalOcean endpoint, with the Worker's DO token → `guard.py` → uvicorn on port 8080. DigitalOcean's endpoint strips `X-User-Id`, `Cookie` and `Authorization`, so the Worker sends the user as `X-Dialectic-User-Id` and `guard.py` turns it back.
 
