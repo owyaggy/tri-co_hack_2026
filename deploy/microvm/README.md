@@ -6,7 +6,7 @@ The preserved public copy of Dialectic: one container on a DigitalOcean MicroVM 
 | --- | --- |
 | `Dockerfile` | Node stage builds `app/frontend/dist`; Python 3.12 + uv installs the backend from `uv.lock`. No OCR packages. Same layout as a checkout, under `/app` |
 | `entrypoint.sh` | PID 1: seeds on first boot, runs uvicorn on `$PORT` (8080), restarts it if it dies, reseeds daily when quiet. Never exits |
-| `guard.py` | Wraps `main:app` and refuses `POST /api/sources` (server fetches any URL) and `POST /api/readings` (uploads, unless `UPLOADS_ENABLED=1`), the jobs Caddy did on the droplet. Can go once the app's own hardening has landed |
+| `guard.py` | Wraps `main:app` and refuses `POST /api/sources` (server fetches any URL) and `POST /api/readings` (uploads, unless `UPLOADS_ENABLED=1`), the jobs Caddy did on the droplet. Since the `harden-public` merge the app does both itself, so this is a second layer |
 | `build.sh` | Builds from a `git archive` of HEAD plus the prepared database; `--push` pushes to `ghcr.io/owyaggy/dialectic` |
 
 ## Build and try it locally
@@ -32,7 +32,7 @@ All from the environment (`doctl compute microvm create --env KEY=value …`). I
 | `DEVICE_ASKS_PER_HOUR` | `5` | Paid Asks per device per hour |
 | `AI_OFF` | `0` | `1` blocks every paid call; cached replays still work |
 | `UPLOADS_ENABLED` | `0` | Leave off: no OCR in the image |
-| `PROFESSOR_PASSWORD` | none | Used once the hardening work is merged; ignored before |
+| `PROFESSOR_PASSWORD` | random (nobody can log in as a professor) | Long and random. Professors log in with it and get a 7-day token; changing it signs them out |
 | `RESEED_HOURS`, `RESEED_QUIET_SECONDS` | `24`, `300` | Keep the VM's auto-pause idle timeout longer than the quiet time, or the reseed never finds a quiet moment |
 
 ## The database

@@ -43,7 +43,10 @@ fi
 : "${RESEED_QUIET_SECONDS:=300}"
 [ -n "${AI_BUDGET_USD:-}" ] || { AI_BUDGET_USD=0; say "AI_BUDGET_USD not set: AI calls are blocked"; }
 [ -n "${SEARCH_BUDGET_USD:-}" ] || { SEARCH_BUDGET_USD=0; say "SEARCH_BUDGET_USD not set: web search is blocked"; }
-export PORT DO_INFERENCE_URL DO_MODEL AI_OFF UPLOADS_ENABLED DEVICE_ASKS_PER_HOUR AI_BUDGET_USD SEARCH_BUDGET_USD
+# Unset would let anyone act as the professor (charter, sources), so fail closed:
+# a random password nobody knows means no professor log-in at all.
+[ -n "${PROFESSOR_PASSWORD:-}" ] || { PROFESSOR_PASSWORD=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'); say "PROFESSOR_PASSWORD not set: professor log-in is disabled"; }
+export PROFESSOR_PASSWORD PORT DO_INFERENCE_URL DO_MODEL AI_OFF UPLOADS_ENABLED DEVICE_ASKS_PER_HOUR AI_BUDGET_USD SEARCH_BUDGET_USD
 
 pid=
 

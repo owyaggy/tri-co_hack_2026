@@ -6,9 +6,9 @@ doesn't allow, before they reach the app:
 - POST /api/readings (uploads), unless UPLOADS_ENABLED=1. There's no OCR in the image.
 
 Paths are matched the way FastAPI routes them (exact and case-sensitive), so
-nothing else can reach those two routes. Once the app's own hardening has landed
-(UPLOADS_ENABLED and the fetch fix in the app), this file can go: point uvicorn
-at main:app in entrypoint.sh.
+nothing else can reach those two routes. Since the harden-public merge the app
+does both itself (UPLOADS_ENABLED, and search.get_public for every fetch), so this
+is a second layer: to drop it, point uvicorn at main:app in entrypoint.sh.
 """
 import json
 import os
