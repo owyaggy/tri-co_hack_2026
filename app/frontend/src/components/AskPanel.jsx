@@ -350,7 +350,7 @@ export default function AnswerCard({ answer, aiReplies, onClose, onAskAgain, onP
 
       <Progress answer={answer} />
 
-      {answer.error && (
+      {answer.error && !answer.error.sessionEnded && (
         <section className="answer-section">
           <ErrorNotice error={answer.error} title="Couldn't answer this question">
             <span className="small">Anything already shown stays.</span>

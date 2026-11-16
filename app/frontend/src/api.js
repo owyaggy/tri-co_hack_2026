@@ -63,7 +63,48 @@ function headers(extra = {}) {
   return { ...base, ...extra };
 }
 
+// ---------- the on-demand server (deploy/microvm, deploy/worker) ----------
+// The public copy runs on a MicroVM that pauses when nobody's using it, behind a Worker that
+// gives out a 4-hour "Start the demo" pass. That brings two states an always-on server didn't
+// have: the server waking up (502/503/504, or no answer, for ~1 s after a pause and up to a
+// minute on a first boot or the daily reseed), and the pass running out (the Worker's 401).
+// ServerBanner.jsx shows both.
+const WAKING_STATUSES = [502, 503, 504];
+const GET_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 8000, 8000, 8000, 8000]; // ~47 s in all
+const WAKING_MESSAGE = "Dialectic's server is starting up. Try again in a few seconds.";
+const ASK_WAKING_MESSAGE = "Dialectic's server was starting up and may not have got your question. Ask again in a few seconds.";
+const STREAM_CUT_MESSAGE = 'The connection dropped before the answer finished.';
+const NO_PASS_DETAIL = 'Start the demo first'; // how the Worker's 401 begins (deploy/worker/worker.js)
+
+let serverState = 'ok'; // 'ok' | 'waking' | 'ended' (the demo pass ran out; only a page load fixes it)
+const serverListeners = new Set();
+
+export function onServerState(listener) {
+  serverListeners.add(listener);
+  listener(serverState);
+  return () => { serverListeners.delete(listener); };
+}
+
+function setServerState(state) {
+  if (serverState === state || serverState === 'ended') return;
+  serverState = state;
+  serverListeners.forEach((listener) => listener(state));
+}
+
+export function sessionEnded() {
+  return serverState === 'ended';
+}
+
+function wakingError() {
+  const error = new Error(WAKING_MESSAGE);
+  error.waking = true;
+  return error;
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function failure(res) {
+  if (WAKING_STATUSES.includes(res.status)) return wakingError();
   let detail = `${res.status} ${res.statusText}`;
   try {
     const body = await res.json();
@@ -71,12 +112,27 @@ async function failure(res) {
   } catch {
     // not JSON: keep the status line
   }
-  if (res.status === 401) {
+  const error = new Error(detail);
+  error.status = res.status; // pages use 404 to spot a note that's gone (the daily reseed)
+  if (res.status === 401 && detail.startsWith(NO_PASS_DETAIL)) {
+    // The Worker's, not the app's: the demo pass ran out. Keep who you are; the banner offers a restart.
+    error.sessionEnded = true;
+    setServerState('ended');
+  } else if (res.status === 401) {
     // Unknown user (e.g. after seed.py --reset), or a professor's password token expired: pick again.
     logOut();
     window.location.href = '/login';
   }
-  return new Error(detail);
+  return error;
+}
+
+// One fetch, or null if there was no answer at all (network error, server not up yet).
+async function tryFetch(path, options) {
+  try {
+    return await fetch('/api' + path, options);
+  } catch {
+    return null;
+  }
 }
 
 async function request(method, path, body) {
@@ -87,9 +143,20 @@ async function request(method, path, body) {
     options.headers['Content-Type'] = 'application/json';
     options.body = JSON.stringify(body);
   }
-  const res = await fetch('/api' + path, options);
-  if (!res.ok) throw await failure(res);
-  return res.json();
+  // Only GETs are retried while the server wakes: a POST may have run (and an Ask costs money).
+  const delays = method === 'GET' ? GET_RETRY_DELAYS_MS : [];
+  for (let attempt = 0; ; attempt++) {
+    const res = await tryFetch(path, options);
+    const waking = !res || WAKING_STATUSES.includes(res.status);
+    if (!waking || attempt >= delays.length) {
+      if (delays.length) setServerState('ok'); // answered, or gave up: either way stop saying "waking"
+      if (!res) throw wakingError();
+      if (!res.ok) throw await failure(res);
+      return res.json();
+    }
+    setServerState('waking');
+    await sleep(delays[attempt]);
+  }
 }
 
 export const get = (path) => request('GET', path);
@@ -107,17 +174,26 @@ export function pdfFile(readingId) {
 // per line. EventSource can't POST, so read the body ourselves. Calls onEvent(event) for
 // each line; resolves when the stream ends.
 export async function askStream(path, body, onEvent) {
-  const res = await fetch('/api' + path, {
+  // Never retried: it may have run, and it costs money. A waking server gets ASK_WAKING_MESSAGE
+  // and the answer card's Ask again button.
+  const res = await tryFetch(path, {
     method: 'POST',
     headers: headers({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
   });
+  if (!res || WAKING_STATUSES.includes(res.status)) throw new Error(ASK_WAKING_MESSAGE);
   if (!res.ok) throw await failure(res);
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffered = '';
   while (true) {
-    const { value, done } = await reader.read();
+    let chunk;
+    try {
+      chunk = await reader.read();
+    } catch {
+      throw new Error(STREAM_CUT_MESSAGE);
+    }
+    const { value, done } = chunk;
     if (done) break;
     buffered += decoder.decode(value, { stream: true });
     const lines = buffered.split('\n');
