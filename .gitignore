@@ -12,3 +12,4 @@ build/
 # Dialectic (see SPEC.md)
 *.db
 app/backend/uploads/
+deploy/worker/.wrangler/

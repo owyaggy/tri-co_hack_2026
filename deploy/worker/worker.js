@@ -10,8 +10,9 @@
 //   - MONTHLY_LIMIT_USD: the DO team's month-to-date usage (billing API). At or over it, no new
 //     passes are given out until next month.
 //   - WAKES_PER_DAY: at most this many passes a day.
-// Notifications go to ntfy (NTFY_URL): 50/80/100% of the monthly limit, the daily cap reached,
-// and (if NOTIFY_STARTS=1) each day's first start.
+// Notifications go to ntfy (NTFY_URL): 50/80/100% of the monthly limit (this DO team: the
+// MicroVM), 50/80/100% of the app's lifetime AI and search budgets (checkAppSpend), the daily cap
+// reached, and (if NOTIFY_STARTS=1) each day's first start.
 //
 // Bindings (wrangler.toml): STATE (KV); vars VM_HOST, MONTHLY_LIMIT_USD, WAKES_PER_DAY,
 // TURNSTILE_SITEKEY, NOTIFY_STARTS; secrets DO_TOKEN (microvm:access + billing:read),
@@ -27,7 +28,7 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/robots.txt") return text("User-agent: *\nDisallow: /\n");
     if (url.pathname === START_PATH && request.method === "POST") return start(request, env, ctx);
-    if (await hasPass(request, env)) return proxy(request, env, url);
+    if (await hasPass(request, env)) return proxy(request, env, url, ctx);
     if (isPage(request)) return page(env, "start");
     return json({ detail: "Start the demo first: open this site in a browser." }, 401);
   },
@@ -115,7 +116,7 @@ function cookie(request, name) {
 
 // --- Proxying to the MicroVM --------------------------------------------------------------
 
-async function proxy(request, env, url) {
+async function proxy(request, env, url, ctx) {
   const headers = new Headers(request.headers);
   headers.delete("Cookie"); // the app uses headers, not cookies; the pass stays here
   headers.delete("Authorization");
@@ -145,6 +146,8 @@ async function proxy(request, env, url) {
   }
   const out = new Response(resp.body, resp);
   out.headers.delete("WWW-Authenticate");
+  // The VM is awake (it just answered), so reading its spend now costs nothing extra.
+  ctx.waitUntil(checkAppSpend(env));
   return out;
 }
 
@@ -187,9 +190,39 @@ async function checkUsage(env, { notify: shouldNotify = false } = {}) {
   return usage;
 }
 
-async function notifyOnce(env, key, title, message) {
+// The app's own lifetime AI and search budgets (spend.py): the AI key is billed to another DO
+// team, so the billing check above can't see it, but the app counts every paid call. At most
+// every APP_SPEND_CHECK_S, and only while the VM is awake; 50/80/100% each notify once, ever.
+const APP_SPEND_CHECK_S = 600;
+
+async function checkAppSpend(env) {
+  const last = Number((await env.STATE.get("appspend:at")) || 0);
+  if (Date.now() - last < APP_SPEND_CHECK_S * 1000) return;
+  await env.STATE.put("appspend:at", String(Date.now()));
+  const resp = await fetch(`https://${env.VM_HOST}/api/spend`, {
+    headers: { Authorization: `Bearer ${env.DO_TOKEN}`, "User-Agent": "dialectic-front-door" },
+  });
+  if (!resp.ok) return;
+  const spend = await resp.json();
+  for (const [name, label] of [["ai", "AI"], ["search", "search"]]) {
+    const { usd, budget_usd: budget } = spend[name] || {};
+    if (!budget) continue;
+    for (const pct of [50, 80, 100]) {
+      if (usd >= (budget * pct) / 100) {
+        await notifyOnce(env, `appspend:${name}:${budget}:${pct}`, `Dialectic: ${pct}% of the ${label} budget`,
+          pct === 100
+            ? `The app has spent $${usd.toFixed(2)} on ${label}, its whole $${budget} budget: ${label} answers are off until the budget is raised.`
+            : `The app has spent $${usd.toFixed(2)} of its $${budget} ${label} budget (lifetime).`,
+          null);
+      }
+    }
+  }
+}
+
+// ttlDays null: remember forever (lifetime budgets).
+async function notifyOnce(env, key, title, message, ttlDays = 40) {
   if (await env.STATE.get(key)) return;
-  await env.STATE.put(key, "1", { expirationTtl: 40 * 86400 });
+  await env.STATE.put(key, "1", ttlDays ? { expirationTtl: ttlDays * 86400 } : {});
   await notify(env, title, message);
 }
 
