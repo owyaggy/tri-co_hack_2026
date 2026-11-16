@@ -14,8 +14,8 @@ kv_namespaces = [{ binding = "STATE", id = "9a2a84276e6b4c4f86601eb7d1f36998" }]
 crons = ["0 13 * * *"] # 08:00 New York (EST): the daily billing check and notifications
 
 [vars]
-VM_HOST = "REPLACE_WITH_MICROVM_ENDPOINT_HOSTNAME"
+VM_HOST = "01a1e3d6-eeb7-7140-a106-b848fcf31bb8.mkc1.microvm.ondigitalocean.com"
 MONTHLY_LIMIT_USD = "5"
 WAKES_PER_DAY = "20"
-TURNSTILE_SITEKEY = "REPLACE_WITH_TURNSTILE_SITE_KEY"
+TURNSTILE_SITEKEY = "0x4AAAAAAGDLmXtHz7Y0ItZB"
 NOTIFY_STARTS = "1"
