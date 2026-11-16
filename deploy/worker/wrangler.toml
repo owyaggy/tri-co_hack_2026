@@ -1,0 +1,21 @@
+# Dialectic's front door (see worker.js and README.md).
+name = "dialectic-front-door"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+
+# The route takes over dialectic.yaggy.dev from the hackathon droplet: deploy it only once the
+# MicroVM is up (README.md, "Going live"). Until then, deploy with `--no-routes`... or leave this
+# commented out and test on the workers.dev URL.
+# routes = [{ pattern = "dialectic.yaggy.dev/*", zone_name = "yaggy.dev" }]
+
+kv_namespaces = [{ binding = "STATE", id = "9a2a84276e6b4c4f86601eb7d1f36998" }]
+
+[triggers]
+crons = ["0 13 * * *"] # 08:00 New York (EST): the daily billing check and notifications
+
+[vars]
+VM_HOST = "REPLACE_WITH_MICROVM_ENDPOINT_HOSTNAME"
+MONTHLY_LIMIT_USD = "5"
+WAKES_PER_DAY = "20"
+TURNSTILE_SITEKEY = "REPLACE_WITH_TURNSTILE_SITE_KEY"
+NOTIFY_STARTS = "1"
