@@ -2,6 +2,8 @@
 
 A collaborative reading platform for college courses. Students annotate course texts together and ask questions about hard passages. Answers come from their peers first, then from AI, but only in the ways the class's charter allows.
 
+This is Owen's fork of the team's hackathon repo, [`Ramen3ater1/tri-co_hack_2026`](https://github.com/Ramen3ater1/tri-co_hack_2026). It adds what keeps the public copy running (`DEPLOY.md`, `deploy/microvm/`, `deploy/worker/`) and the app's handling of a server that sleeps. Fixes that help everyone go back to the team repo as pull requests.
+
 ## Try it
 
 **https://dialectic.yaggy.dev** (or `yag.gy/dia`) is the public copy: click **Start the demo**, pass the quick check, then log in as anyone. Students have no passwords; professors do, so on the public copy you can't log in as Prof. Rivera. It runs on a server that sleeps when nobody's using it and wakes in about a second ([`DEPLOY.md`](DEPLOY.md)). Visitors' notes are wiped once a day.
@@ -22,7 +24,7 @@ During the hackathon (13–14 Nov 2026) a dev copy updated itself from `main`, t
 
 The Mac app (macOS 14+) lets you ask about or annotate a passage from wherever you read it (Preview, Notability), with hotkeys: **⌥⇧D** ask, **⌥⇧N** note, **⌥⇧H** show classmates' highlights. It needs a server it can reach without the public copy's Start page, so pick **Server → This Mac (localhost:8000)** and run the backend locally; the other entries in that menu were the droplet's copies.
 
-1. Open **[Actions → Mac app](https://github.com/Ramen3ater1/tri-co_hack_2026/actions/workflows/mac-app.yml)**, click the newest run with a green tick, and download **Dialectic-dev-mac** at the bottom of the page.
+1. Open the team repo's **[Actions → Mac app](https://github.com/Ramen3ater1/tri-co_hack_2026/actions/workflows/mac-app.yml)** (the builds run there, not in this fork), click the newest run with a green tick, and download **Dialectic-dev-mac** at the bottom of the page.
 2. Unzip it and move `Dialectic.app` to Applications. It isn't notarized, so macOS says it's **"damaged"** until you clear its downloaded-from-the-internet flag, once per download, in Terminal:
    ```sh
    xattr -dr com.apple.quarantine /Applications/Dialectic.app
@@ -51,7 +53,7 @@ Details, and what each hotkey does: [`app/mac/README.md`](app/mac/README.md).
 2. **Install Node.js** (the current LTS) for the frontend, from <https://nodejs.org> or your package manager.
 3. **Clone and configure:**
    ```sh
-   git clone git@github.com:Ramen3ater1/tri-co_hack_2026.git
+   git clone git@github.com:owyaggy/tri-co_hack_2026.git     # or the team repo, Ramen3ater1/tri-co_hack_2026
    cd tri-co_hack_2026
    cp .env.example .env    # then fill in the keys; ask in the team chat
    ```

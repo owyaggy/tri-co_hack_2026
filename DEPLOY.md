@@ -4,7 +4,7 @@ How the public copy is set up, and the commands for everything we do to it. Scri
 
 **Since 16 Nov 2026** the public copy is one container on a DigitalOcean **MicroVM** that pauses when nobody is using it, behind a **Cloudflare Worker**. The hackathon droplet (three copies: demo, sandbox, dev) was destroyed that day, and `dialectic-sandbox.yaggy.dev`, `dialectic-dev.yaggy.dev` and `dialectic.space` are gone. The droplet's scripts stay in `deploy/` for reference (`Caddyfile`, `setup-droplet.sh`, `update.sh`, the autodeploy and service files); its how-to is in git history: `git show 8cb1651:DEPLOY.md`.
 
-Everything here needs Owen's accounts (DigitalOcean, Cloudflare, GitHub's container registry). Everyone else runs Dialectic locally (`README.md`, *Running it*).
+This setup lives only in Owen's fork, [`owyaggy/tri-co_hack_2026`](https://github.com/owyaggy/tri-co_hack_2026), whose `main` is what's deployed; the team repo, `Ramen3ater1/tri-co_hack_2026`, gets general fixes as pull requests (the security fixes were #6). Everything here needs Owen's accounts (DigitalOcean, Cloudflare, GitHub's container registry). Everyone else runs Dialectic locally (`README.md`, *Running it*).
 
 ## What's running
 
