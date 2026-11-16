@@ -106,15 +106,17 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function failure(res) {
   if (WAKING_STATUSES.includes(res.status)) return wakingError();
   let detail = `${res.status} ${res.statusText}`;
+  let code = null;
   try {
     const body = await res.json();
+    code = body.code || null;
     if (body.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
   } catch {
     // not JSON: keep the status line
   }
   const error = new Error(detail);
   error.status = res.status; // pages use 404 to spot a note that's gone (the daily reseed)
-  if (res.status === 401 && detail.startsWith(NO_PASS_DETAIL)) {
+  if (res.status === 401 && (code === 'no_pass' || detail.startsWith(NO_PASS_DETAIL))) {
     // The Worker's, not the app's: the demo pass ran out. Keep who you are; the banner offers a restart.
     error.sessionEnded = true;
     setServerState('ended');

@@ -30,7 +30,7 @@ export default {
     if (url.pathname === START_PATH && request.method === "POST") return start(request, env, ctx);
     if (await hasPass(request, env)) return proxy(request, env, url, ctx);
     if (isPage(request)) return page(env, "start");
-    return json({ detail: "Start the demo first: open this site in a browser." }, 401);
+    return json({ detail: "Start the demo first: open this site in a browser.", code: "no_pass" }, 401);
   },
 
   async scheduled(event, env, ctx) {

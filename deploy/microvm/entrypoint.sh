@@ -90,6 +90,7 @@ trap 'say "stopping"; stop; exit 0' TERM INT
 [ -f "$STAMP" ] || reseed
 start
 
+quiet_before=0  # was the site already quiet at the last check? (see below)
 while :; do
   sleep 30 & wait $!  # in the background, so a TERM is handled at once
   if ! kill -0 "$pid" 2>/dev/null; then
@@ -102,12 +103,19 @@ while :; do
   last=$(cat "$STAMP" 2>/dev/null || echo 0)
   if [ $((now - last)) -ge $((RESEED_HOURS * 3600)) ]; then
     quiet=$((now - $(stat -c %Y "$LOG" 2>/dev/null || echo 0)))
-    if [ "$quiet" -ge "$RESEED_QUIET_SECONDS" ]; then
+    # Quiet at two checks in a row: right after a resume the log is hours old, but the request
+    # that woke the VM may not be logged yet, so one check would reseed under the first visitor.
+    if [ "$quiet" -ge "$RESEED_QUIET_SECONDS" ] && [ "$quiet_before" = 1 ]; then
+      quiet_before=0
       say "daily reseed (quiet for ${quiet} s)"
       stop
       [ -f "$LOG" ] && mv "$LOG" "$LOG.1"
       reseed
       start
+    elif [ "$quiet" -ge "$RESEED_QUIET_SECONDS" ]; then
+      quiet_before=1
+    else
+      quiet_before=0
     fi
   fi
 done
