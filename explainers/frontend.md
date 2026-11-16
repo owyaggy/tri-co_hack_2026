@@ -23,12 +23,12 @@ Dependencies: `react` + `react-dom`, `react-router-dom` (pages and links), `reac
 | File | Lines | What it's for |
 | --- | --- | --- |
 | `src/main.jsx` | ~35 | The routes. Every page but `/login` is wrapped in `LoggedIn`, which sends you to `/login` if nobody is stored. |
-| `src/api.js` | ~125 | `get` / `post` / `put` / `patch` / `del`, `askStream()` for the streamed Ask, `pdfFile()` for react-pdf, who's logged in (`me()`, `logIn()`, `logOut()`, `isProfessor()`), and this browser's device ID (`deviceId()`). |
+| `src/api.js` | ~205 | `get` / `post` / `put` / `patch` / `del`, `askStream()` for the streamed Ask, `pdfFile()` for react-pdf, who's logged in (`me()`, `logIn()`, `logOut()`, `isProfessor()`), this browser's device ID (`deviceId()`), and the on-demand server's state (`onServerState()`, `sessionEnded()`, see *The on-demand server*). |
 | `src/colors.js` | ~40 | Person colours: `colorFor(person)` and `initial(name)`. |
 | `src/styles.css` | ~310 | The only stylesheet. Colour tokens at the top, then one block per screen. |
 | `src/pages/Login.jsx` | ~65 | `/login` (S01). |
 | `src/pages/Course.jsx` | ~155 | `/` (S02): reading cards, the professor's upload card, charter and library cards. |
-| `src/pages/Reader.jsx` | ~310 | `/readings/:id` (S03–S11): the core screen. Start reading here for anything about the demo. |
+| `src/pages/Reader.jsx` | ~495 | `/readings/:id` (S03–S11): the core screen. Start reading here for anything about the demo. |
 | `src/pages/Charter.jsx` | ~320 | `/charter` (S12, S13, S18): professor and student views, charter gaps, proposals. |
 | `src/pages/Sources.jsx` | ~100 | `/sources` (S14): the course source library. |
 | `src/pages/Search.jsx` | ~150 | `/search?q=` (S15), with a Words | Meaning (AI) switch (`&mode=meaning`). |
@@ -39,13 +39,14 @@ Dependencies: `react` + `react-dom`, `react-router-dom` (pages and links), `reac
 | `src/components/AskPanel.jsx` | ~315 | The answer card, and the functions that turn stream events into its state. |
 | `src/components/NavHeader.jsx`, `UserMenu.jsx` | ~105 | The header on every page but the reader; the avatar menu (S19). |
 | `src/components/Avatar.jsx`, `ErrorNotice.jsx`, `Icons.jsx` | ~70 | Small shared pieces. |
+| `src/components/ServerBanner.jsx` | ~20 | The strip over every page: "Waking the server…" or "This demo session ended. Start again". |
 | `public/manifest.webmanifest`, `public/icon.svg` | | The whole PWA (SPEC §4). |
 
 ## Who you are
 
 Students have no password (SPEC §3.1). `Login` lists `GET /api/users`. Clicking a person calls `POST /api/login` and stores **that whole user object** in `localStorage` (`dialectic_user`), and `api.js` sends its id as **`X-User-Id`** on every request. A professor whose row says `needs_password` (the server has `PROFESSOR_PASSWORD`) gets a password box under their row first; the token `/login` returns is kept as `dialectic_professor_token` and sent as **`X-Professor-Token`**, and `logOut()` drops it (`explainers/security.md`). The course page shows the upload card only when `/course` says `uploads_enabled`. The reader hands react-pdf `options={{ isEvalSupported: false }}` (one constant, `PDF_OPTIONS`), which the server's CSP needs anyway. Pages call `me()` to read it and `isProfessor()` to decide what to *show*. The server still checks every permission: a student's `PUT /charter` gets a 403 whatever the UI shows.
 
-- A **401** means the stored id is unknown (e.g. after `seed.py --reset` renumbered users), or a professor's token has expired or the password changed. `api.js` clears it and goes to `/login`.
+- A **401** from the app means the stored id is unknown (e.g. after `seed.py --reset` renumbered users), or a professor's token has expired or the password changed. `api.js` clears it and goes to `/login`. The public copy's Worker sends a 401 of its own when the demo pass runs out; that one keeps who you are (see *The on-demand server*).
 - `Login` also stores the user list (`dialectic_users`). Peer results in an Ask answer carry an author's name but not their id, so `colorFor` uses that list to look up their colour.
 
 **This browser is a "device"** (SPEC §9.1, spending limits). `deviceId()` in `api.js` makes a random ID the first time it's needed (`crypto.randomUUID()`, or a Math.random one on a plain-http address where that doesn't exist) and keeps it in `localStorage` under `dialectic_device`, **separate from the user**, so logging out or switching users keeps it. Every request sends it as **`X-Device-Id`**: the JSON calls, the PDF fetch and the streamed Ask. If storage is unavailable (private window, blocked site data) the ID lives in memory for the session. The server uses it only to count paid Asks per device per hour; clearing storage gets round that, which is fine (the copy's budget is the real cap).
@@ -54,8 +55,8 @@ Students have no password (SPEC §3.1). `Login` lists `GET /api/users`. Clicking
 
 1. A page calls e.g. `get('/course')` in a `useEffect`.
 2. `api.js` adds `X-User-Id` and `X-Device-Id` (and `Content-Type: application/json` when there's a body; for `FormData`, like the PDF upload, it lets the browser set the multipart header).
-3. On a non-2xx response it throws an `Error` whose message is the server's `detail` (for a 500 that's the real error, e.g. a missing API key).
-4. The page catches it and shows it with `<ErrorNotice>`. Nothing is swallowed (CLAUDE.md: fail loudly).
+3. On a non-2xx response it throws an `Error` whose message is the server's `detail` (for a 500 that's the real error, e.g. a missing API key), with the HTTP code as `error.status`. A GET that gets 502/503/504 or no answer is retried first (*The on-demand server*).
+4. The page catches it and shows it with `<ErrorNotice>`. Nothing is swallowed (CLAUDE.md: fail loudly), with two exceptions: the reader refreshes quietly on a 404 for a note that's gone, and errors from an expired demo pass are left to the banner.
 
 ## The reader
 
@@ -105,7 +106,12 @@ Mouse handling is `onMouseUp` on the PDF column (plus `onMouseDown`/`onMouseMove
 
 ### Live updates
 
-While the tab is visible, the reader fetches the annotations again every **`POLL_MS`** (5 s), and also when the window gets focus or the tab becomes visible. Each fetch replaces the list. The green **Live** dot greys out while the tab is hidden. This is how a question asked from the Mac hotkey shows up without a reload.
+While the tab is visible **and someone's there**, the reader fetches the annotations again every **`POLL_MS`** (5 s), and also when the window gets focus or the tab becomes visible. Each fetch replaces the list. This is how a question asked from the Mac hotkey shows up without a reload.
+
+- **"Someone's there"** means a mouse move, click, key, wheel, scroll or touch in the last **`IDLE_MS`** (5 min). After that polling stops, and the first input refreshes at once and starts it again. Without this, a reader tab left open on screen polled the public copy's MicroVM every 5 s, so it never paused (and kept costing) until the 4-hour pass ran out.
+- The green **Live** dot greys out while the tab is hidden, after `IDLE_MS`, or once the demo pass has run out (polling stops for good then).
+- Only one poll is in flight at a time: while the server wakes, a poll can wait up to ~47 s.
+- A **404** from Reply, Delete, the sharing checkbox or a saved answer means that note or question is gone (someone deleted it, or the public copy's daily reseed wiped it), so the reader just refreshes the margin (`goneOrError`).
 
 ## Asking a question
 
@@ -160,11 +166,22 @@ A toggle or rule on the *sources* layer shows no notice: the library was searche
 - **Search**: two sections, "Notes and questions" and "In the readings", each result linking into the reader at that page and annotation. The server marks hits as `[[word]]`; `Snippet` splits the string and wraps hits in `<mark>` elements. Locked notes never appear (the server leaves them out). The **Words | Meaning (AI)** switch under the box puts `mode=meaning` in the URL: results are then one section, "Passages close in meaning", reading passages only (plain text, no marks). If the charter turned it off, the server sends `blocked` and the page shows "Meaning search is off" with the switch's name and a link to the charter. The switch reuses the reader's `.select-toggle` pill look (`.search-mode` makes it sit in the page flow).
 - **User menu** (avatar, S19): **Share my notes with future classes** (`PUT /me/sharing`, then a line with how many changed), **Switch user**, **Use on Mac** (`dialectic://login?user=<id>`, only shown on a real Mac via `platform.js` `IS_MAC`; does nothing if the Mac app isn't installed).
 
+## The on-demand server
+
+The public copy (`deploy/microvm/`, `deploy/worker/`) runs on a MicroVM that pauses after 15 quiet minutes and resumes on the next request, behind a Cloudflare Worker that gives out a 4-hour pass after a Turnstile check. An always-on server never had the two states this brings, and `api.js` handles both:
+
+- **Waking up.** A resume takes about a second; a first boot or the daily reseed (port closed ~30 s) takes up to a minute. Meanwhile the Worker answers API calls with a 503 (or DO's 502/504). A **GET** is retried on 502/503/504 or no answer at all, after 1, 2, 4, then 8 s (`GET_RETRY_DELAYS_MS`, ~47 s in all), while `ServerBanner` shows **"Waking the server…"**; if it still fails, the page shows "Dialectic's server is starting up. Try again in a few seconds." **POST, PUT, PATCH and DELETE are never retried** (they may have run), and neither is the **Ask**, which costs money: it gets "…may not have got your question. Ask again in a few seconds." and the card's **Ask again**. A stream cut midway says "The connection dropped before the answer finished."
+- **The PDF** is fetched by react-pdf, and pdf.js remembers a worker script that failed to load, so if the reader opens while the server is down, `onPdfError` waits for the server (a retried `GET /readings/{id}`) and reloads the page once (a `sessionStorage` flag stops a loop; a second failure is shown).
+- **The pass running out.** The Worker then answers every API call with a 401 whose `detail` starts "Start the demo first" (`NO_PASS_DETAIL`). `api.js` does **not** log you out for that one: it marks the session ended, `ServerBanner` shows **"This demo session ended. Start again"** (a plain `<a href="/">`, so the Worker's Start page loads), `ErrorNotice` hides those errors so they don't repeat on every card, and the reader stops polling. The app's own 401s still go to `/login`.
+- **The daily reseed** wipes visitors' notes but keeps the seeded users, readings and their ids, so the stored user still works. An open reader just loses those notes on its next poll (and 404s refresh quietly, above).
+
+Locally (no Worker) none of this shows, apart from the retries if the backend is stopped.
+
 ## Safety rules the frontend keeps
 
 - **User text is never inserted as HTML.** Notes, quotes, questions, AI text and search snippets are all rendered as React text. There's no `innerHTML` or `dangerouslySetInnerHTML` anywhere; keep it that way.
 - **Sources the charter excludes are never linked** (`not_permitted`, `not_covered`). Showing them is the point; linking them would get round the charter.
-- **Errors are shown, not hidden.** Every failed request ends up on screen with the server's message.
+- **Errors are shown, not hidden.** Every failed request ends up on screen with the server's message (except the two in *How a request flows*, step 4).
 
 ## Where to change things
 
@@ -172,7 +189,8 @@ A toggle or rule on the *sources* layer shows no notice: the library was searche
 | --- | --- |
 | Colours, fonts, spacing | The custom properties at the top of `src/styles.css` |
 | Who gets which highlight colour | `PALETTE` in `src/colors.js` (picked by `user.id % 3`) |
-| How often the reader refreshes | `POLL_MS` at the top of `Reader.jsx` |
+| How often the reader refreshes, and when it stops for lack of input | `POLL_MS`, `IDLE_MS` at the top of `Reader.jsx` |
+| How long GETs wait for a waking server; the waking and session-ended wording | `GET_RETRY_DELAYS_MS` and the messages at the top of *the on-demand server* in `api.js`; the banners in `ServerBanner.jsx` |
 | Starting zoom, zoom step, popover widths | Constants at the top of `Reader.jsx` |
 | Answer card wording ("Still stuck?…", the wait hint) | Constants at the top of `AskPanel.jsx`; the notice wording is in `CharterNotice` there |
 | Charter switch labels and help text | `SWITCHES` at the top of `Charter.jsx` |

@@ -9,6 +9,7 @@ import Charter from './pages/Charter.jsx';
 import Sources from './pages/Sources.jsx';
 import Search from './pages/Search.jsx';
 import FeedbackButton from './components/FeedbackButton.jsx';
+import ServerBanner from './components/ServerBanner.jsx';
 import './styles.css';
 
 // Every page but Login needs someone "logged in" (SPEC §3.1: no passwords).
@@ -19,6 +20,7 @@ function LoggedIn({ children }) {
 function App() {
   return (
     <BrowserRouter>
+      <ServerBanner />
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/" element={<LoggedIn><Course /></LoggedIn>} />

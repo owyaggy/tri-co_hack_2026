@@ -90,6 +90,10 @@ button, input, textarea, select { font: inherit; color: inherit; }
 
 mark { background: var(--quote); color: inherit; border-radius: 3px; padding: 0 1px; }
 
+/* The on-demand server's banner (ServerBanner.jsx): floats over the top of any page. */
+.server-banner { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 50; max-width: calc(100vw - 32px); padding: 8px 16px; border-radius: 10px; background: var(--notice-bg); color: var(--notice-ink); box-shadow: var(--shadow-pop); font-size: 14px; }
+.server-banner.ended a { font-weight: 600; }
+
 /* ---------- Login (S01) ---------- */
 
 .login { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
