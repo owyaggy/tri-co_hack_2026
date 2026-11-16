@@ -15,6 +15,9 @@ import { AreaIcon, TextCursorIcon } from '../components/Icons.jsx';
 // annotations, polling, the current selection and the open answer card.
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
+// No eval in pdf.js: the server's CSP forbids it anyway, and it keeps a malicious PDF's fonts from
+// running code (explainers/security.md). One object, so react-pdf doesn't reload the document.
+const PDF_OPTIONS = { isEvalSupported: false };
 
 const POLL_MS = 5000;           // how often the margin refreshes while the tab is visible (SPEC §3.3)
 const START_SCALE = 1.3;
@@ -371,6 +374,7 @@ export default function Reader() {
         >
           <Document
             file={file}
+            options={PDF_OPTIONS}
             onLoadSuccess={(pdf) => setPageCount(pdf.numPages)}
             onLoadError={setError}
             loading={<div className="pdf-status">Loading the reading…</div>}

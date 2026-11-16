@@ -3,18 +3,24 @@
 // the server's real message (`detail`), so pages can show it (fail loudly).
 
 const USER_KEY = 'dialectic_user'; // the whole user object from GET /api/users
+// When the server has a professor password (explainers/security.md), POST /login gives a
+// professor a signed token, sent as X-Professor-Token on every request.
+const PROFESSOR_TOKEN_KEY = 'dialectic_professor_token';
 
 export function me() {
   const saved = localStorage.getItem(USER_KEY);
   return saved ? JSON.parse(saved) : null;
 }
 
-export function logIn(user) {
+export function logIn(user, professorToken = null) {
   localStorage.setItem(USER_KEY, JSON.stringify(user));
+  if (professorToken) localStorage.setItem(PROFESSOR_TOKEN_KEY, professorToken);
+  else localStorage.removeItem(PROFESSOR_TOKEN_KEY);
 }
 
 export function logOut() {
   localStorage.removeItem(USER_KEY);
+  localStorage.removeItem(PROFESSOR_TOKEN_KEY);
 }
 
 export function isProfessor() {
@@ -52,6 +58,8 @@ function headers(extra = {}) {
   const user = me();
   const base = { 'X-Device-Id': deviceId() };
   if (user) base['X-User-Id'] = String(user.id);
+  const professorToken = localStorage.getItem(PROFESSOR_TOKEN_KEY);
+  if (professorToken) base['X-Professor-Token'] = professorToken;
   return { ...base, ...extra };
 }
 
@@ -64,7 +72,7 @@ async function failure(res) {
     // not JSON: keep the status line
   }
   if (res.status === 401) {
-    // Unknown user (e.g. after seed.py --reset): pick again.
+    // Unknown user (e.g. after seed.py --reset), or a professor's password token expired: pick again.
     logOut();
     window.location.href = '/login';
   }

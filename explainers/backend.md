@@ -30,7 +30,7 @@ In production the same process also serves the built React app (`app/frontend/di
 | `spend.py` | ~100 | Spending limits (SPEC §9.1): the per-device limit, the budgets, `AI_OFF`, and recording what each paid call cost. |
 | `ocr.py` | ~105 | OCRs every upload (SPEC §3.11): finds scanned pages, strips their old text layer with `pikepdf`, runs `ocrmypdf --skip-text`. Run in a background thread by `POST /readings`. Also `box_text()`: the text inside a Select-area box (the PDF's text there, else Tesseract on that area). |
 | `sections.py` | ~120 | Splits a reading into sections by its headings at upload, and finds which section a highlight is in. |
-| `search.py` | ~120 | Kagi web search and fetching pages' main text (several at once), all cached in the database. |
+| `search.py` | ~200 | Kagi web search and fetching pages' main text (several at once), all cached in the database. The fetcher only reaches the public web (`get_public`, see `explainers/security.md`). |
 | `semantic.py` | ~120 | Meaning search of readings (SPEC §3.8): cuts each reading into passages of a few sentences, embeds them with `bge-m3` on DO inference the first time a meaning search touches the reading (stored in `reading_passages`), and ranks passages by cosine similarity to the query. Readings only, never annotations. Model, passage size and score cutoff are constants at the top. |
 | `locate.py` | ~85 | For the Mac hotkey: finds which reading and page a copied passage is from, and its highlight boxes in the PDF. |
 | `seed.py` | ~260 | DEMO: the PHIL 247 seminar (the demo course): people, charter, proposals, Hobbes with notes, Wollstonecraft with none, and the Rousseau notes added when Rousseau is uploaded live. Calls the two below. |
@@ -49,7 +49,7 @@ All under `/api`, all in `main.py`. The exact request and response shapes are in
 
 | Area | Routes |
 | --- | --- |
-| Who you are | `GET /users` (log-in list), `GET /course` (course, reading cards with page/note/question counts, you) |
+| Who you are | `GET /users` (log-in list), `POST /login` (a professor's password for a token, when the copy has one), `GET /course` (course, reading cards with page/note/question counts, you, `uploads_enabled`) |
 | Readings | `POST /readings` (professor upload), `GET /readings/{id}`, `GET /readings/{id}/pdf`, `POST /readings/{id}/box-text` (text in a Select-area box) |
 | Annotations | `GET`/`POST /readings/{id}/annotations`, `DELETE /annotations/{id}` (with its replies), `PATCH /annotations/{id}` and `PUT /me/sharing` (share with future classes or not) |
 | Asking | `POST /readings/{id}/ask` and `/ask/stream` (web reader), `POST /ask` and `/ask/stream` (Mac hotkey), `GET /questions/{id}/answer` (reopen an answer card) |
@@ -61,10 +61,11 @@ All under `/api`, all in `main.py`. The exact request and response shapes are in
 
 ## How a request flows
 
-1. The frontend sends every request with an **`X-User-Id`** header (who you've "logged in as"; there are no passwords).
+1. The frontend sends every request with an **`X-User-Id`** header (who you've "logged in as"). Students have no password. On a copy with `PROFESSOR_PASSWORD` set, a professor also sends **`X-Professor-Token`**, which `POST /login` gave them for the password.
+   - Two pieces of plain ASGI middleware at the top of `main.py` wrap every request: `LimitBodySize` (413 over 1 MB, or 50 MB for an upload) and `AddSecurityHeaders` (CSP and friends). Details in `explainers/security.md`.
 2. FastAPI runs the route's **dependencies** first. In `main.py`:
    - `get_conn()` opens a database connection and closes it after the request.
-   - `current_user()` looks up the user from the header: 401 if unknown.
+   - `current_user()` looks up the user from the header: 401 if unknown, if it's the AI user, or if it's a professor without a valid `X-Professor-Token` while `PROFESSOR_PASSWORD` is set. The token is `user_id.expiry.HMAC` keyed by the password (`professor_token()`), so no session table.
    - `professor()` is `current_user()` plus a 403 for students. A route that takes `user=Depends(professor)` is professor-only, and that's the whole permission system. "Only the author" checks (delete, change sharing) are an `if` in the route.
 3. The route runs its SQL, calls `conn.commit()` if it wrote anything, and returns a dict, which FastAPI sends as JSON.
 4. The Ask routes also read an optional **`X-Device-Id`** header (a random id the web and Mac apps keep), for the per-device spending limit.
@@ -200,7 +201,7 @@ The functions in `ai.py` only take **strings**: charter text, the quote, the que
 - **Seed annotations appear on upload.** The demo starts with the professor uploading the reading live, so last year's annotations can't exist beforehand. `POST /readings` asks `main.demo_seed_for(file name, course)`: if it's `rousseau-social-contract.pdf` uploaded into PHIL 247 (or, with the old seed, `souls-of-black-folk-ch1.pdf` into HIST 214), the background thread skips OCR and calls that seed's `add_demo_annotations()`. The highlight boxes are computed from the real PDF with pdfplumber.
 - **`seed.py --reset --with-reading`** sets up the same state without the live upload, in case it fails on stage.
 - **`seed.py --reset --with-sources`** preloads the library with the SEP entry on Rousseau and Wikipedia's "General will", in case web search fails on stage. Add both flags to get everything.
-- **Anyone can be anyone:** `X-User-Id` is trusted as is.
+- **Anyone can be any student:** `X-User-Id` is trusted as is for students. The professor needs `PROFESSOR_PASSWORD` when the copy sets it (the public one does); without it, anyone can be the professor too.
 
 ## Where to change things
 
@@ -210,6 +211,9 @@ The functions in `ai.py` only take **strings**: charter text, the quote, the que
 | Whether an interpretive question gets a context-only explanation or a refusal | `GATE_CONTEXT_ONLY` in `ai.py` |
 | What the AI and search cost | `LLM_USD_PER_MTOK_IN`, `LLM_USD_PER_MTOK_OUT` in `ai.py`; `KAGI_USD_PER_SEARCH` in `search.py` |
 | Budgets, the per-device limit, the emergency stop | `AI_BUDGET_USD`, `SEARCH_BUDGET_USD`, `DEVICE_ASKS_PER_HOUR`, `AI_OFF` in that copy's `.env` (then restart it) |
+| The professor password, uploads on or off | `PROFESSOR_PASSWORD`, `UPLOADS_ENABLED` in that copy's `.env` (then restart it) |
+| Body and text limits, the CSP | `MAX_BODY_BYTES`, `MAX_UPLOAD_BYTES`, `MAX_TEXT_CHARS`, `SECURITY_HEADERS` at the top of `main.py` |
+| What the page fetcher may reach | `FETCH_PORTS`, `BLOCKED_NETWORKS`, `MAX_REDIRECTS`, `MAX_PAGE_BYTES` at the top of `search.py` |
 | The limit notices students see | `AI_OFF_NOTICE`, `DEVICE_LIMIT_NOTICE`, `BUDGET_NOTICE` in `spend.py` |
 | How hard each AI call thinks | `GATE_EFFORT`, `FILTER_EFFORT`, `PICK_EFFORT`, `EXPLAIN_EFFORT` in `ai.py` |
 | The wording of "blocked by toggle" notices | `TOGGLE_LABELS` in `ai.py` |

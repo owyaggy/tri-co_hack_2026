@@ -44,7 +44,7 @@ Seed users: **Prof. Rivera** (professor), **Ana** and **Ben** (students), plus *
 
 ### 3.1 Log in as
 
-A page listing the seeded users, **grouped by course**; a course with more than five people shows its first four (the professor, then the seed's featured students) and a **Show all N people** link. Clicking one stores their `user_id` in `localStorage` and sends it as an `X-User-Id` header (alongside the `X-Device-Id` from §9.1). No passwords. `TODO(edge)`: anyone can be anyone.
+A page listing the seeded users, **grouped by course**; a course with more than five people shows its first four (the professor, then the seed's featured students) and a **Show all N people** link. Clicking one stores their `user_id` in `localStorage` and sends it as an `X-User-Id` header (alongside the `X-Device-Id` from §9.1). No passwords for students: anyone can be any student. A copy with `PROFESSOR_PASSWORD` set (the public one) asks for it before logging in as a professor (`explainers/security.md`).
 
 On a Mac (not an iPad, which also reports itself as a Mac), each user row also has a small **Use on Mac** link to `dialectic://login?user=<id>`. Clicking it opens the Mac app (§3.9), which saves that user, so both apps act as the same person without picking twice. If the Mac app isn't installed the link does nothing. `TODO(edge)`.
 
@@ -407,13 +407,14 @@ CREATE TABLE reading_passages (   -- meaning search (§3.8): filled the first ti
 
 ## 6. API
 
-All routes are under `/api`; all except `/users` and `/spend` need `X-User-Id`. **Everything is scoped to the user's course** (§3.2): `/course`, `/charter*`, `/sources`, `/search` and the hotkey's locate only see that course, and another course's reading, PDF or question is a 404. The Ask routes also read an optional `X-Device-Id` (§9.1). Professor-only routes return 403 for students.
+All routes are under `/api`; all except `/users` and `/spend` need `X-User-Id`. **Everything is scoped to the user's course** (§3.2): `/course`, `/charter*`, `/sources`, `/search` and the hotkey's locate only see that course, and another course's reading, PDF or question is a 404. The Ask routes also read an optional `X-Device-Id` (§9.1). Professor-only routes return 403 for students. **Professor password** (`explainers/security.md`): when the server has `PROFESSOR_PASSWORD` set, acting as a professor on any route also needs `X-Professor-Token` (from `POST /login`), or it's a 401; unset, nothing changes. Request bodies over 1 MB (50 MB for `POST /readings`) are a 413, a body without `Content-Length` a 411, and a note, question, quote or comment over 10,000 characters a 422.
 
 | Method | Path | Who | Purpose |
 | --- | --- | --- | --- |
-| GET | `/users` | anyone | Log-in-as list, ordered by course: each user also has `course_id`, `course_title`, `current_cohort` |
-| GET | `/course` | all | Course, readings list (with what each reading card shows), current user |
-| POST | `/readings` | prof | Multipart upload: title + PDF. Returns at once with `"status": "processing"`; OCR (§3.11), then page extraction with `pypdf`, run in the background |
+| GET | `/users` | anyone | Log-in-as list, ordered by course: each user also has `course_id`, `course_title`, `current_cohort`, and `needs_password` (a professor, when the server has `PROFESSOR_PASSWORD`) |
+| POST | `/login` | anyone | `{user_id, password}` → `{user, professor_token}`. Students need no password and get `null`; a professor with `needs_password` gets a token to send as `X-Professor-Token` (7 days), or a 403 for a wrong password |
+| GET | `/course` | all | Course, readings list (with what each reading card shows), current user, `uploads_enabled` |
+| POST | `/readings` | prof | Multipart upload: title + PDF. Returns at once with `"status": "processing"`; OCR (§3.11), then page extraction with `pypdf`, run in the background. 403 when the copy has `UPLOADS_ENABLED=0` |
 | GET | `/readings/{id}` | all | Metadata + page count + `status`, `error` |
 | GET | `/readings/{id}/pdf` | all | The PDF file |
 | GET | `/readings/{id}/annotations` | all | Visible annotations (with replies), all pages. Locked ones (§3.4) as `{id, page, rects, locked: true, group, group_notes}` only |
@@ -436,7 +437,7 @@ All routes are under `/api`; all except `/users` and `/spend` need `X-User-Id`. 
 | GET | `/charter/gaps` | all | Kinds of source skipped as not covered by the charter (§3.7) |
 | POST | `/charter/gaps/dismiss` | all | `{kind}`: hide that kind from the list; returns the list |
 | GET | `/sources` | all | The course source library |
-| POST · DELETE | `/sources`, `/sources/{id}` | prof | Add by URL (fetched + extracted) / remove |
+| POST · DELETE | `/sources`, `/sources/{id}` | prof | Add by URL (fetched + extracted) / remove. Only public http(s) pages on ports 80/443; anything else is a 400 (`explainers/security.md`) |
 | GET | `/search?q=` | all | FTS over visible annotations + reading text |
 | GET | `/search?q=&mode=meaning` | all | Reading passages close in meaning (embeddings), if the charter allows it |
 | GET | `/spend` | anyone | Spending against this copy's budgets (§9.1), no `X-User-Id` needed: `{"ai": {"usd", "calls", "budget_usd"}, "search": {...}, "ai_off", "device_asks_per_hour"}` |

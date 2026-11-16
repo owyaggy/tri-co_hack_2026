@@ -139,7 +139,8 @@ export default function Course() {
                     </span>
                   </Link>
                 ))}
-                {professor && <UploadCard onUploaded={load} />}
+                {/* uploads_enabled: off on the public copy (UPLOADS_ENABLED=0, explainers/security.md) */}
+                {professor && course.uploads_enabled && <UploadCard onUploaded={load} />}
               </section>
 
               <aside>

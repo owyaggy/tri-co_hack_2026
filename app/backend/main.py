@@ -2,7 +2,10 @@
 
     uv run --env-file ../../.env uvicorn main:app --reload
 """
+import hashlib
+import hmac
 import json
+import os
 import re
 import threading
 import time
@@ -10,12 +13,13 @@ import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import httpx
 import pypdf
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from typing import Literal
+from pydantic import BaseModel, Field
+from typing import Annotated, Literal
 
 import ask
 import db
@@ -31,7 +35,73 @@ import spend
 UPLOADS_DIR = Path(__file__).parent / "uploads"
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
+# Limits for a public copy (explainers/security.md).
+MAX_BODY_BYTES = 1_000_000        # any request body but an upload
+MAX_UPLOAD_BYTES = 50_000_000     # POST /readings (a scanned PDF)
+MAX_TEXT_CHARS = 10_000           # a note, reply, question, quote or comment: they end up in AI prompts
+UPLOADS_ENABLED = os.environ.get("UPLOADS_ENABLED", "1").strip() != "0"  # 0 = POST /readings is a 403
+
+Text = Annotated[str, Field(max_length=MAX_TEXT_CHARS)]
+
 app = FastAPI(title="Dialectic")
+
+
+class LimitBodySize:
+    """Refuse a request body over the limit before anything reads it. Uvicorn makes a body match
+    its Content-Length, so checking that header is enough; a body without one (chunked) is refused."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["method"] in ("POST", "PUT", "PATCH", "DELETE"):
+            limit = MAX_UPLOAD_BYTES if scope["path"] == "/api/readings" else MAX_BODY_BYTES
+            headers = dict(scope["headers"])
+            length = headers.get(b"content-length")
+            if length is None and b"transfer-encoding" in headers:
+                return await JSONResponse({"detail": "Send a Content-Length"}, status_code=411)(scope, receive, send)
+            if length is not None and (not length.isdigit() or int(length) > limit):
+                return await JSONResponse({"detail": f"Request body over {limit} bytes"}, status_code=413)(scope, receive, send)
+        await self.app(scope, receive, send)
+
+
+# Sent with every response. The CSP allows only our own scripts; styles may be inline (React and
+# pdf.js set them) plus Google Fonts; pdf.js's worker is served from /assets. No framing anywhere.
+SECURITY_HEADERS = {
+    "Content-Security-Policy": "; ".join([
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src 'self' https://fonts.gstatic.com data:",
+        "img-src 'self' data: blob:",
+        "worker-src 'self' blob:",
+        "connect-src 'self'",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+    ]),
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+class AddSecurityHeaders:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                message["headers"] = list(message.get("headers", [])) + [
+                    (name.lower().encode(), value.encode()) for name, value in SECURITY_HEADERS.items()]
+            await send(message)
+        await self.app(scope, receive, send_with_headers if scope["type"] == "http" else send)
+
+
+app.add_middleware(LimitBodySize)
+app.add_middleware(AddSecurityHeaders)
 
 _conn = db.connect()
 db.migrate(_conn)  # add any new columns to an older database
@@ -55,11 +125,45 @@ def get_conn():
         conn.close()
 
 
-def current_user(x_user_id: int = Header(), conn=Depends(get_conn)):
-    """Every route except /users needs X-User-Id. TODO(edge): anyone can be anyone (SPEC §3.1)."""
+# The professor gate (explainers/security.md). With PROFESSOR_PASSWORD set, acting as a professor
+# (any route) needs X-Professor-Token, which POST /login hands out for the password. Unset (local
+# development) it's "log in as" for everyone, as before. Students never need a password.
+PROFESSOR_TOKEN_DAYS = 7
+WRONG_PASSWORD_DELAY_S = 1  # slows guessing a little; Cloudflare in front does the real limiting
+
+
+def professor_password():
+    return os.environ.get("PROFESSOR_PASSWORD", "")
+
+
+def professor_signature(user_id, expires):
+    """HMAC keyed by the password, so changing PROFESSOR_PASSWORD signs everyone out."""
+    message = f"{user_id}.{expires}".encode()
+    return hmac.new(professor_password().encode(), message, hashlib.sha256).hexdigest()
+
+
+def professor_token(user_id):
+    expires = int(time.time()) + PROFESSOR_TOKEN_DAYS * 86400
+    return f"{user_id}.{expires}.{professor_signature(user_id, expires)}"
+
+
+def valid_professor_token(token, user_id):
+    try:
+        token_user, expires, signature = token.split(".")
+        token_user, expires = int(token_user), int(expires)
+    except (AttributeError, ValueError):
+        return False
+    return (token_user == user_id and expires > time.time()
+            and hmac.compare_digest(signature, professor_signature(user_id, expires)))
+
+
+def current_user(x_user_id: int = Header(), x_professor_token: str | None = Header(None), conn=Depends(get_conn)):
+    """Every route except /users needs X-User-Id. Students: anyone can be any student (SPEC §3.1)."""
     user = conn.execute("SELECT * FROM users WHERE id = ?", (x_user_id,)).fetchone()
-    if user is None:
+    if user is None or user["role"] == "ai":  # the AI writes only through ask.py, never as a visitor
         raise HTTPException(401, f"Unknown user id {x_user_id}")
+    if user["role"] == "professor" and professor_password() and not valid_professor_token(x_professor_token, user["id"]):
+        raise HTTPException(401, "Log in again with the professor password")
     return dict(user)
 
 
@@ -67,6 +171,26 @@ def professor(user=Depends(current_user)):
     if user["role"] != "professor":
         raise HTTPException(403, "Professor only")
     return user
+
+
+class LogIn(BaseModel):
+    user_id: int
+    password: str | None = None
+
+
+@app.post("/api/login")
+def log_in(login: LogIn, conn=Depends(get_conn)):
+    """Log in as someone. Students need nothing; a professor needs PROFESSOR_PASSWORD if it's set,
+    and gets back professor_token to send as X-Professor-Token."""
+    user = conn.execute("SELECT * FROM users WHERE id = ? AND role != 'ai'", (login.user_id,)).fetchone()
+    if user is None:
+        raise HTTPException(404, f"No user {login.user_id}")
+    if user["role"] != "professor" or not professor_password():
+        return {"user": dict(user), "professor_token": None}
+    if not hmac.compare_digest((login.password or "").encode(), professor_password().encode()):
+        time.sleep(WRONG_PASSWORD_DELAY_S)
+        raise HTTPException(403, "Wrong professor password")
+    return {"user": dict(user), "professor_token": professor_token(user["id"])}
 
 
 # ---------- shared helpers ----------
@@ -227,7 +351,8 @@ def list_users(conn=Depends(get_conn)):
         """SELECT u.*, c.title AS course_title, c.current_cohort FROM users u JOIN course c ON c.id = u.course_id
            WHERE u.role != 'ai' ORDER BY u.course_id, u.id"""
     ).fetchall()
-    return [dict(r) for r in rows]
+    # needs_password: the log-in page asks for the professor password before logging in as them.
+    return [{**dict(r), "needs_password": r["role"] == "professor" and bool(professor_password())} for r in rows]
 
 
 @app.get("/api/course")
@@ -252,11 +377,14 @@ def course(user=Depends(current_user), conn=Depends(get_conn)):
         # Uploads are saved as "<timestamp>-<name>.pdf": show the name the professor uploaded.
         card["filename"] = re.sub(r"^\d+-", "", Path(card.pop("pdf_path")).name)
         cards.append(card)
-    return {"course": get_course(conn, user["course_id"]), "readings": cards, "user": user}
+    return {"course": get_course(conn, user["course_id"]), "readings": cards, "user": user,
+            "uploads_enabled": UPLOADS_ENABLED}
 
 
 @app.post("/api/readings")
-def upload_reading(title: str = Form(), file: UploadFile = File(), user=Depends(professor), conn=Depends(get_conn)):
+def upload_reading(title: str = Form(max_length=200), file: UploadFile = File(), user=Depends(professor), conn=Depends(get_conn)):
+    if not UPLOADS_ENABLED:
+        raise HTTPException(403, "Uploads are switched off on this copy of Dialectic")
     UPLOADS_DIR.mkdir(exist_ok=True)
     safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", file.filename)
     dest = UPLOADS_DIR / f"{int(time.time())}-{safe_name}"
@@ -339,10 +467,10 @@ def list_annotations(reading_id: int, user=Depends(current_user), conn=Depends(g
 
 
 class NewAnnotation(BaseModel):
-    body: str
+    body: Text
     parent_id: int | None = None   # set for a reply; page/quote/rects then come from the parent
     page: int | None = None
-    quote: str | None = None
+    quote: Text | None = None
     rects: list[dict] | None = None
     share_with_future: bool = True
 
@@ -455,9 +583,9 @@ def update_all_sharing(update: SharingUpdate, user=Depends(current_user), conn=D
 
 class AskRequest(BaseModel):
     page: int
-    quote: str
+    quote: Text
     rects: list[dict]
-    question: str
+    question: Text
 
 
 @app.post("/api/readings/{reading_id}/ask")
@@ -503,8 +631,8 @@ def ask_question_stream(reading_id: int, req: AskRequest, user=Depends(current_u
 
 
 class HotkeyAskRequest(BaseModel):
-    quote: str
-    question: str
+    quote: Text
+    question: Text
     source_app: str | None = None  # the app the text came from, e.g. "Notability" (optional)
 
 
@@ -545,7 +673,7 @@ def hotkey_steps(conn, reading, user, page, rects, req, device_id):
 
 
 class LocateRequest(BaseModel):
-    text: str  # a few lines read off the screen, one per line
+    text: Text  # a few lines read off the screen, one per line
 
 
 @app.post("/api/locate")
@@ -594,8 +722,8 @@ def hotkey_ask_stream(req: HotkeyAskRequest, user=Depends(current_user), conn=De
 
 
 class HotkeyNoteRequest(BaseModel):
-    quote: str
-    body: str
+    quote: Text
+    body: Text
     share_with_future: bool = True
     source_app: str | None = None  # as for HotkeyAskRequest
 
@@ -666,7 +794,7 @@ def update_charter(update: CharterUpdate, user=Depends(professor), conn=Depends(
 
 
 class NewComment(BaseModel):
-    body: str
+    body: Text
 
 
 @app.post("/api/charter/comments")
@@ -750,7 +878,12 @@ class NewSource(BaseModel):
 
 @app.post("/api/sources")
 def add_source(new: NewSource, user=Depends(professor), conn=Depends(get_conn)):
-    page = search.fetch_page(conn, new.url)
+    try:
+        # Checked here too, not only on download: web_cache could hold a page from before the check.
+        search.public_address(httpx.URL(new.url))
+        page = search.fetch_page(conn, new.url)
+    except (search.UnsafeURL, httpx.InvalidURL) as e:  # not a public web page (explainers/security.md)
+        raise HTTPException(400, str(e))
     if not page["text"]:
         raise HTTPException(422, f"Couldn't extract any text from {new.url}")
     conn.execute(
