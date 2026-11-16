@@ -5,9 +5,20 @@
 # lb_try_duration: while a copy restarts (dev restarts on every push to main), hold requests
 # and retry for up to 15 s instead of answering 502.
 
+# Adding a source makes the server fetch any URL it's given (an open SSRF hole until the
+# hardening fix lands), so refuse it on every copy. Asks still find sources themselves.
+(no_add_source) {
+	@add_source {
+		method POST
+		path /api/sources /api/sources/
+	}
+	respond @add_source "Adding sources is turned off on this copy." 403
+}
+
 # Demo copy: the judges and us on stage.
 http://dialectic.yaggy.dev, https://dialectic.yaggy.dev {
 	tls internal
+	import no_add_source
 	reverse_proxy 127.0.0.1:8000 {
 		lb_try_duration 15s
 	}
@@ -17,6 +28,7 @@ http://dialectic.yaggy.dev, https://dialectic.yaggy.dev {
 # Also on yaggy.dev: Swarthmore's campus DNS blocks the newly registered dialectic.space.
 http://dialectic.space, https://dialectic.space, http://dialectic-sandbox.yaggy.dev, https://dialectic-sandbox.yaggy.dev {
 	tls internal
+	import no_add_source
 	reverse_proxy 127.0.0.1:8001 {
 		lb_try_duration 15s
 	}
@@ -25,6 +37,7 @@ http://dialectic.space, https://dialectic.space, http://dialectic-sandbox.yaggy.
 # Dev copy: runs `main`, for teammates to try new work and report problems.
 http://dev.dialectic.space, https://dev.dialectic.space, http://dialectic-dev.yaggy.dev, https://dialectic-dev.yaggy.dev {
 	tls internal
+	import no_add_source
 	reverse_proxy 127.0.0.1:8002 {
 		lb_try_duration 15s
 	}
