@@ -2,58 +2,42 @@
 
 A collaborative reading platform for college courses. Students annotate course texts together and ask questions about hard passages. Answers come from their peers first, then from AI, but only in the ways the class's charter allows.
 
-## Testing: try it, report problems, see fixes
+## Try it
 
-How the team tries Dialectic and gets things changed. No setup needed beyond a GitHub account.
-
-### 1. Open the web app
-
-**https://dialectic-dev.yaggy.dev** runs the newest work (`main`), so it can occasionally break. Log in as anyone; there are no passwords:
+**https://dialectic.yaggy.dev** (or `yag.gy/dia`) is the public copy: click **Start the demo**, pass the quick check, then log in as anyone. Students have no passwords; professors do, so on the public copy you can't log in as Prof. Rivera. It runs on a server that sleeps when nobody's using it and wakes in about a second ([`DEPLOY.md`](DEPLOY.md)). Visitors' notes are wiped once a day.
 
 | Log in as | To try |
 | --- | --- |
-| **Prof. Rivera** (professor) | Upload a reading, edit the charter (rules, permissible sources, AI switches), see every note |
-| **Ana**, **Ben** (students) | Annotate; see classmates' notes unlock once you note or ask nearby; select a passage → **Ask** |
+| **Prof. Rivera** (professor; locally, or with the password) | Upload a reading, edit the charter (rules, permissible sources, AI switches), see every note |
+| **Ana**, **Ben**, **Chidi** (students) | Annotate; see classmates' notes unlock once you note or ask nearby; select a passage → **Ask** |
 | **Sam** (a past student) | Notes shared from last year's class |
 
-A good first run is the demo path: as Ben, open the reading, write a note near the locked card on page 3, then select the double-consciousness passage and ask where the idea comes from. Then, as Prof. Rivera, turn off "AI may write explanations" on the Charter page and ask again.
+Adding sources and uploading readings are off on the public copy, and AI and search have a small lifetime budget; past it, Asks still bring classmates' answers and the library. To try everything, including uploads and the professor's side, run it locally (*Development*, below).
 
-Use the `yaggy.dev` addresses: campus wifi blocks `dialectic.space`. The public link on our slide, `yag.gy/dia`, opens the sandbox (`dialectic-sandbox.yaggy.dev`), which judges use too. Test on dev, not on the spare demo copy (`dialectic.yaggy.dev`); see [`DEPLOY.md`](DEPLOY.md) for all three copies.
+## Testing during the hackathon
 
-### 2. Optional: get the Mac app
+During the hackathon (13–14 Nov 2026) a dev copy updated itself from `main`, teammates reported problems with its **Report a problem** button (GitHub issues labelled `feedback`), and a person promoted `main` to `stable` for the judges' copies. That droplet is gone; the button now shows only when you run Dialectic locally, and the issue workflow is in [`CLAUDE.md`](CLAUDE.md) (*Feedback issues*).
 
-The Mac app (macOS 14+) lets you ask about or annotate a passage from wherever you read it (Preview, Notability), with hotkeys: **⌥⇧D** ask, **⌥⇧N** note, **⌥⇧H** show classmates' highlights.
+### The Mac app
+
+The Mac app (macOS 14+) lets you ask about or annotate a passage from wherever you read it (Preview, Notability), with hotkeys: **⌥⇧D** ask, **⌥⇧N** note, **⌥⇧H** show classmates' highlights. It needs a server it can reach without the public copy's Start page, so pick **Server → This Mac (localhost:8000)** and run the backend locally; the other entries in that menu were the droplet's copies.
 
 1. Open **[Actions → Mac app](https://github.com/Ramen3ater1/tri-co_hack_2026/actions/workflows/mac-app.yml)**, click the newest run with a green tick, and download **Dialectic-dev-mac** at the bottom of the page.
-2. Unzip it and move `Dialectic.app` to Applications. It isn't signed with an Apple developer certificate, so macOS says it's **"damaged"** until you clear its downloaded-from-the-internet flag, once per download, in Terminal:
+2. Unzip it and move `Dialectic.app` to Applications. It isn't notarized, so macOS says it's **"damaged"** until you clear its downloaded-from-the-internet flag, once per download, in Terminal:
    ```sh
    xattr -dr com.apple.quarantine /Applications/Dialectic.app
    ```
    Then open it normally. It runs on Intel and Apple Silicon Macs.
-3. In its menu-bar menu, pick who you are, and check **Server → Dev**. Grant **Accessibility** (and **Screen Recording**, for ⌥⇧H) when macOS asks: System Settings → Privacy & Security.
+3. In its menu-bar menu, pick who you are and the server. Grant **Accessibility** (and **Screen Recording**, for ⌥⇧H) when macOS asks: System Settings → Privacy & Security.
 
 Details, and what each hotkey does: [`app/mac/README.md`](app/mac/README.md).
-
-### 3. Report what you notice
-
-- **Web:** the **Report a problem** button, bottom-right on the dev copy.
-- **Mac:** menu-bar menu → **Report a problem…**
-
-Both open a GitHub form with the page, who you're logged in as and your browser or Mac already filled in. Pick a type (broken / don't like it / idea / question), give it a short title, say what happened in plain words, and drag in a screenshot if it helps. **Check [open feedback](https://github.com/Ramen3ater1/tri-co_hack_2026/issues?q=is%3Aopen+label%3Afeedback) first**: if it's already there, add a comment or a 👍 instead.
-
-### 4. How it gets fixed
-
-1. Anyone asks their Claude, in the repo: **"work through the open feedback issues"**. `CLAUDE.md` tells it how: label each one, close duplicates, claim one, fix it on `main` with `Fixes #<n>` (which closes the issue) and comment when it's done. Product questions go to `SPEC.md` §11 for a decision instead.
-2. **The dev copy updates itself** about 1–2 minutes after a push to `main`. [`/version.txt`](https://dialectic-dev.yaggy.dev/version.txt) shows which commit it's running. Reload and check the fix.
-3. **Mac app changes** are rebuilt on every push (about a minute): download the new build from Actions as in step 2.
-4. **The public copies (sandbox, which judges use, and the spare demo copy) change only when a person promotes** `main` to `stable` after checking the demo path ([`DEPLOY.md`](DEPLOY.md)), so a broken change on dev never reaches the judges by accident.
 
 ## Project docs
 
 - **What we're building and why:** [`SPEC.md`](SPEC.md)
 - **How we work** (logging, commits, branches; written for agents, useful for people): [`CLAUDE.md`](CLAUDE.md)
 - **What's happened so far:** [`LOG.md`](LOG.md)
-- **Deploying, and the live copies:** [`DEPLOY.md`](DEPLOY.md)
+- **Deploying, and the public copy:** [`DEPLOY.md`](DEPLOY.md)
 
 ## Development
 
@@ -109,4 +93,4 @@ Open Claude Code at the repo root; it reads `CLAUDE.md` and follows the team's r
 ### Branches
 
 - **`main`:** everyone works here and pushes small changes often. It may be briefly broken.
-- **`stable`:** the best version we could submit right now. A person promotes `main` to it after checking the demo path works. The live site and the submission come from `stable`.
+- **`stable`:** the best version we could submit right now. A person promotes `main` to it after checking the demo path works. The submission came from `stable`; the public copy is built from whatever commit Owen deploys (`DEPLOY.md`).

@@ -1,139 +1,90 @@
 # Deploying Dialectic
 
-How the live copies are set up, and the commands for everything we do to them. The plan and reasoning are in `SPEC.md` §9; this file is the how-to. The scripts and config live in `deploy/`.
+How the public copy is set up, and the commands for everything we do to it. Scripts and config are in `deploy/microvm/` (the image) and `deploy/worker/` (the front door); each has a README with the details.
+
+**Since 16 Nov 2026** the public copy is one container on a DigitalOcean **MicroVM** that pauses when nobody is using it, behind a **Cloudflare Worker**. The hackathon droplet (three copies: demo, sandbox, dev) was destroyed that day, and `dialectic-sandbox.yaggy.dev`, `dialectic-dev.yaggy.dev` and `dialectic.space` are gone. The droplet's scripts stay in `deploy/` for reference (`Caddyfile`, `setup-droplet.sh`, `update.sh`, the autodeploy and service files); its how-to is in git history: `git show 8cb1651:DEPLOY.md`.
+
+Everything here needs Owen's accounts (DigitalOcean, Cloudflare, GitHub's container registry). Everyone else runs Dialectic locally (`README.md`, *Running it*).
 
 ## What's running
 
-One DigitalOcean droplet (2 GB, Ubuntu 24.04) just for the hackathon, separate from Owen's other server. Ask Owen for its IP; SSH is `ssh root@<droplet-ip>` with his key. It runs **three copies** of the app, each with its own database, uploads, `.env` and budget. Demo and sandbox run the `stable` branch; dev runs `main`:
+| Piece | Where | What it does |
+| --- | --- | --- |
+| **Public link** | `https://yag.gy/dia` | A 302 redirect (Cloudflare redirect rule on `yag.gy`) to `https://dialectic.yaggy.dev/` |
+| **Front door** | Cloudflare Worker `dialectic-front-door`, route `dialectic.yaggy.dev/*` | A "Start the demo" page behind Turnstile; passing it gives a 4-hour pass (signed cookie). Requests with a pass go to the VM. Spending guards and phone alerts (below) |
+| **The app** | MicroVM `dialectic-demo-2` in the **Dialectic** DigitalOcean team, region `mkc1`, 1 vCPU / 2 GiB | The image `ghcr.io/owyaggy/dialectic:sha-…` (public): FastAPI serving the API and the built frontend, with its own database on the VM's disk. Pauses after 15 idle minutes; the next request resumes it in about a second |
 
-| Copy | URL | Who it's for | Checkout | Port | Service | Limits (`.env`) |
-| --- | --- | --- | --- | --- | --- | --- |
-| **demo** | `https://dialectic.yaggy.dev` | Spare: a clean copy we keep reset, and switch the public link to if the sandbox breaks | `/srv/dialectic-demo` | 8000 | `dialectic@demo` | AI $10, search $3, no device limit |
-| **sandbox** | `https://dialectic-sandbox.yaggy.dev` (also `dialectic.space`) | Everyone: judges and participants, via the slide's link `yag.gy/dia` | `/srv/dialectic-sandbox` | 8001 | `dialectic@sandbox` | AI $12, search $4, 10 paid Asks/device/hour |
-| **dev** | `https://dialectic-dev.yaggy.dev` (also `dev.dialectic.space`) | Teammates trying the newest work and reporting problems; may be briefly broken | `/srv/dialectic-dev` | 8002 | `dialectic@dev` | AI $3, search $1, no device limit |
+A request: browser → Cloudflare → the Worker (no pass: the Start page, or a 401 for API calls) → the VM's DigitalOcean endpoint, with the Worker's DO token → `guard.py` → uvicorn on port 8080. DigitalOcean's endpoint strips `X-User-Id`, `Cookie` and `Authorization`, so the Worker sends the user as `X-Dialectic-User-Id` and `guard.py` turns it back.
 
-How a request gets there: browser → **Cloudflare** (DNS for both domains is proxied, and Cloudflare serves the public HTTPS certificate) → **Caddy** on the droplet (`/etc/caddy/Caddyfile`, from `deploy/Caddyfile`) → the copy's **uvicorn** process on `127.0.0.1:<port>`, run by systemd from `deploy/dialectic@.service` as the `dialectic` user. FastAPI serves both the API and the built frontend (`app/frontend/dist`).
+`/version.txt` shows the commit the image was built from. There's no dev copy and nothing deploys itself: a new version is a new image and a new VM (below).
 
-The `.env` files on the droplet hold the API keys and each copy's limits. They are never in git; `.env.example` lists the variables.
+## What it costs, and the limits
 
-## The dev copy deploys itself
-
-Every minute, a timer on the droplet (`dialectic-autodeploy.timer`) checks GitHub. When `main` has new commits, it updates the dev copy: `uv sync`, builds the frontend beside the live one and swaps it in, reseeds the dev database if `db.py` or `seed.py` changed (keeping `web_cache` and `spend`), restarts `dialectic@dev` and checks it answers. **Push to `main`, and about a minute later (plus ~30 s to build) it's on `https://dialectic-dev.yaggy.dev`.**
-
-- **Which commit is live:** `https://dialectic-dev.yaggy.dev/version.txt`.
-- **If a deploy fails** (a dependency or the build breaks), dev keeps running the previous version, and that commit isn't retried until the next push. See why: `ssh root@IP "journalctl -u dialectic-autodeploy -n 30 --no-pager -o cat"`.
-- **Pause it:** `ssh root@IP "systemctl stop dialectic-autodeploy.timer"` (`start` to resume).
-- **Change it:** the script is a fixed copy in `/usr/local/sbin/dialectic-autodeploy-dev`, not run from the checkout, so pushes can't change what runs as root. After editing `deploy/autodeploy-dev.sh` or its unit files: `scp deploy/autodeploy-dev.sh deploy/dialectic-autodeploy.* root@IP:/tmp/`, then `ssh root@IP "install -m 755 /tmp/autodeploy-dev.sh /usr/local/sbin/dialectic-autodeploy-dev && cp /tmp/dialectic-autodeploy.* /etc/systemd/system/ && systemctl daemon-reload"`.
-
-## The public link: `yag.gy/dia`
-
-Judges and the audience see the same presentation: one slide with the video and one link, **`https://yag.gy/dia`**. It's a **302** redirect (Cloudflare redirect rule on `yag.gy`, above the catch-all) to the **sandbox**, `https://dialectic-sandbox.yaggy.dev`. The clean, curated demo is the video; the live link is for poking around, so other people's notes in it are fine.
-
-- **302, not 301**, so browsers don't remember it and we can repoint it.
-- **If the sandbox breaks or gets messed up:** change the rule's target to `https://dialectic.yaggy.dev` (the demo copy, kept reset). The slide doesn't change.
-- Don't put `dialectic.space` on the slide: campus wifi blocks it (`LOG.md`, 10:56 Sat).
-
-Only dev does this. The demo and sandbox copies change only when a person promotes `main` to `stable` and runs `update.sh`.
-
-## Everyday tasks
-
-Run these from the repo root on your machine. `IP` stands for the droplet's IP.
-
-### Deploy a new version
-
-The droplet only ever runs `stable`, so first promote (a person's call, after clicking through the demo path; see `CLAUDE.md`, *Branches*):
-
-```sh
-git push origin main:stable
-git tag good-$(date +%H%M) main && git push origin --tags
-ssh root@IP 'bash -s' < deploy/update.sh            # both copies
-ssh root@IP 'bash -s -- sandbox' < deploy/update.sh  # just one
-```
-
-To put the newest `main` on the dev copy (no promotion needed): `ssh root@IP 'bash -s -- dev' < deploy/update.sh`.
-
-`update.sh` pulls `stable` (or `main`, for dev), runs `uv sync`, rebuilds the frontend, restarts the service and prints `active` for each copy. It never touches the databases.
-
-### Roll back
-
-Never rewrite `stable`. To run an earlier known-good version on the droplet:
-
-```sh
-ssh root@IP "sudo -u dialectic git -C /srv/dialectic-demo checkout good-0531 && systemctl restart dialectic@demo"
-```
-
-(Rebuild the frontend too if it changed: run the `npm ci && npm run build` step from `update.sh` by hand.) Then fix on `main`, promote, and run `update.sh`, which puts the copy back on `stable`.
-
-### Reset a copy to the demo starting state
-
-```sh
-ssh root@IP "sudo -u dialectic bash -c 'cd /srv/dialectic-demo/app/backend && ~/.local/bin/uv run --env-file ../../.env seed.py --reset --with-reading' && systemctl restart dialectic@demo"
-```
-
-`--reset` keeps `web_cache` (rehearsed answers) and the `spend` table (so budgets aren't reset). Leave out `--with-reading` to start with no reading, if the professor will upload it live in demo step 1.
-
-### Before submitting
-
-1. **Reset the sandbox** (the command above with `sandbox` in place of `demo` in both places) and check its budget (*Check spending*): it's what `yag.gy/dia` opens.
-2. Check `https://yag.gy/dia` lands on the sandbox.
-
-### Keeping the spare ready (demo copy)
-
-1. Reset it (above).
-2. **Rehearse each demo question once** on `https://dialectic.yaggy.dev` and read the answer: what plays on stage is the cached one (`TODO.md`).
-3. Back up the database: `ssh root@IP "cp /srv/dialectic-demo/app/backend/dialectic.db /root/demo-$(date +%H%M).db"`.
-4. **Laptop backup:** run `stable` locally with a copy of that database (`scp root@IP:/srv/dialectic-demo/app/backend/dialectic.db app/backend/`), then follow `README.md` *Running it*, in case the venue wifi or the droplet fails during our slot.
+- **The VM:** $0.039 an hour while awake, and a few cents a month for its disk while paused. It's awake only while someone uses it, plus 15 minutes. A reader tab stops checking for new notes after 5 minutes without input, so a forgotten tab doesn't keep it awake.
+- **AI and search:** the app's own **lifetime** budgets, `AI_BUDGET_USD=3` and `SEARCH_BUDGET_USD=1`, over its `spend` table. Past a budget, that layer shows a notice; classmates' answers and the library keep working. Paid Asks are also limited to 5 per device per hour. The model key is billed to Owen's **Main** team, not the Dialectic team.
+- **The Worker's guards:** no new passes once the Dialectic team's month-to-date usage reaches `MONTHLY_LIMIT_USD` ($5; that covers the VM, not AI), or after `WAKES_PER_DAY` (20) passes in a day.
+- **Phone alerts** (ntfy): 50, 80 and 100% of the monthly limit and of each app budget; the daily cap reached; each day's first start.
 
 ### Check spending
 
-```sh
-curl -s https://dialectic-sandbox.yaggy.dev/api/spend   # dialectic.space is blocked on campus
-curl -s https://dialectic.yaggy.dev/api/spend
-```
-
-Each shows money spent per service against that copy's budget. Past its budget a copy blocks AI with a notice; classmates' answers and the library keep working.
-
-### Emergency stop (no more AI spending on a copy)
+Open `https://dialectic.yaggy.dev/api/spend` in a browser after starting the demo. Without a browser, ask the VM directly with the Worker's token or any token with `microvm:access` (DigitalOcean's endpoint refuses some default user agents, hence `-A`):
 
 ```sh
-ssh root@IP "sed -i 's/^AI_OFF=.*/AI_OFF=1/' /srv/dialectic-sandbox/.env && systemctl restart dialectic@sandbox"
+curl -s -A dialectic-check -H "Authorization: Bearer $DO_TOKEN" https://<VM_HOST>/api/spend
 ```
 
-Set it back to `0` the same way. Change budgets or the device limit by editing the same `.env` and restarting.
+`VM_HOST` is in `deploy/worker/wrangler.toml`. Asking wakes the VM.
+
+## Everyday tasks
+
+Run these from the repo root. `ID` is the VM's id (`doctl --context dialectic compute microvm list`); the settings live in `~/.config/dialectic/microvm.env` and `~/.config/dialectic/worker.env` on Owen's laptop, never in git.
+
+### Deploy a new version
+
+A new image needs a new VM, which starts from the seed database baked into the image. So carry the old VM's spending and cached answers into the seed first, or the budgets start counting again from the old figures:
+
+```sh
+deploy/microvm/carry-state.py $ID          # VM's spend + web_cache -> the seed database (backed up first)
+deploy/microvm/build.sh --push             # builds from HEAD, pushes ghcr.io/owyaggy/dialectic:sha-<short sha>
+doctl --context dialectic compute microvm create dialectic-demo-N \
+  --oci-ref ghcr.io/owyaggy/dialectic:sha-<short sha> --region mkc1 --cpu 1 --memory 2048 \
+  --http-port 8080 --auto-pause --auto-pause-idle-timeout 15m --auto-resume --tag dialectic \
+  $(grep -v '^#' ~/.config/dialectic/microvm.env | sed 's/^/--env /')
+```
+
+First boot takes about 22 s. Check `https://<new id>.mkc1.microvm.ondigitalocean.com/version.txt` (with the `curl` above), then set `VM_HOST` in `deploy/worker/wrangler.toml` to the new host, `npx wrangler@4 deploy` from `deploy/worker/`, commit, and delete the old VM: `doctl --context dialectic compute microvm delete $ID`. Anyone with a pass keeps it: it's signed by the Worker, not the VM.
+
+### Change a setting, or stop AI spending
+
+The VM reads `/var/lib/dialectic/env` (`KEY=value` lines) over its creation settings. Edit `~/.config/dialectic/microvm.env`, then write it to the VM and restart the app, which comes back within 30 s:
+
+```sh
+doctl --context dialectic compute microvm exec $ID -- sh -c \
+  "umask 077; echo $(grep -v '^#' ~/.config/dialectic/microvm.env | base64 -w0) | base64 -d > /var/lib/dialectic/env && kill \$(cat /var/lib/dialectic/uvicorn.pid)"
+```
+
+- **Emergency stop for AI:** `AI_OFF=1`. Cached answers still replay; nothing new is paid for.
+- **Stop new visitors:** `npx wrangler@4 deploy --var WAKES_PER_DAY:0` from `deploy/worker/`. Passes already given out work until they expire (4 hours).
+- **Take it offline:** comment out `routes` in `wrangler.toml` and deploy, or delete the route in the Cloudflare dashboard.
+
+### Reset the demo
+
+The VM reseeds itself once a day (`RESEED_HOURS`), when nobody has made a request for 5 minutes at two checks in a row: visitors' notes go, cached answers and spending stay. To reset now: `doctl --context dialectic compute microvm exec $ID -- rm /var/lib/dialectic/last-reseed`; it reseeds at the next quiet moment.
 
 ### Logs and status
 
 ```sh
-ssh root@IP "journalctl -u dialectic@sandbox -f"            # live log
-ssh root@IP "systemctl status dialectic@demo dialectic@sandbox caddy --no-pager"
+doctl --context dialectic compute microvm list --format ID,Name,State
+doctl --context dialectic compute microvm exec $ID -- tail -50 /var/lib/dialectic/uvicorn.log
+cd deploy/worker && npx wrangler@4 tail     # the Worker's live log
 ```
 
-### Change the Caddy config or the service file
+### Change the Worker
 
-Edit `deploy/Caddyfile` or `deploy/dialectic@.service`, commit, then:
-
-```sh
-scp deploy/Caddyfile deploy/dialectic@.service root@IP:/tmp/
-ssh root@IP "cp /tmp/Caddyfile /etc/caddy/ && cp /tmp/dialectic@.service /etc/systemd/system/ && systemctl daemon-reload && systemctl reload caddy && systemctl restart dialectic@demo dialectic@sandbox"
-```
+Edit `deploy/worker/worker.js` or `wrangler.toml`, then `npx wrangler@4 deploy` from `deploy/worker/` (log in once with `npx wrangler@4 login`). Its secrets (`DO_TOKEN`, `TURNSTILE_SECRET`, `COOKIE_SECRET`, `NTFY_URL`) are set with `npx wrangler@4 secret put <NAME>`, which reads the value from stdin. `deploy/worker/README.md` has the details.
 
 ## Cloudflare
 
-**Swarthmore's campus DNS blocks `dialectic.space`** (it answers with `malware.swarthmore.edu`, probably because the domain is newly registered), so on campus wifi only the `yaggy.dev` names work. Share those; the `dialectic.space` names stay as aliases for when the block lifts.
-
-Both hostnames are proxied by Cloudflare (orange cloud). Cloudflare serves the public certificate; Caddy accepts both plain HTTP and HTTPS with its own internal certificate, so it works with Cloudflare SSL mode **Flexible** or **Full**.
-
-- **`yaggy.dev` is in Full (strict)**, so `dialectic.yaggy.dev` has its own **Configuration Rule** (Rules → Configuration Rules, "dialectic full ssl": hostname is one of `dialectic.yaggy.dev`, `dialectic-sandbox.yaggy.dev`, `dialectic-dev.yaggy.dev` → SSL **Full**). Delete the rule when the droplet goes. `dialectic.space` needs nothing.
-- **Error 526** means the zone is in **Full (strict)**, which rejects Caddy's internal certificate. Either add a Cloudflare **Configuration Rule** for that hostname setting SSL to **Full**, or switch the record to **DNS only** (grey cloud) and replace that host's block in the Caddyfile with a plain `dialectic.yaggy.dev { reverse_proxy 127.0.0.1:8000 }` so Caddy gets a real Let's Encrypt certificate.
-- The Ask streams its answer (server-sent events); it was checked through Cloudflare and arrives stage by stage. Cloudflare cuts requests at 100 s; a fresh Ask takes 20–35 s.
-
-## Setting up a droplet from scratch
-
-Only needed for a new droplet (2 GB Ubuntu 24.04, your SSH key, A records for both hosts pointing at it):
-
-```sh
-scp deploy/Caddyfile deploy/dialectic@.service root@IP:/tmp/
-ssh root@IP 'bash -s' < deploy/setup-droplet.sh
-```
-
-That adds swap, installs Node 22, Caddy and uv, opens the firewall for SSH/HTTP/HTTPS, creates the `dialectic` user, clones `stable` into both checkouts and enables the services. Then install each copy's `.env` (keys plus its limits from the table above, mode 600, owned by `dialectic`) at `/srv/dialectic-<copy>/.env`, run `update.sh`, and reset both copies with `--with-reading`.
+- **`dialectic.yaggy.dev`** has a proxied DNS record pointing at `192.0.2.1`, a placeholder: a Worker route needs a proxied record, but requests never reach its target.
+- **Turnstile:** one widget (Managed) for the hostname `dialectic.yaggy.dev`; its site key is in `wrangler.toml`, its secret is a Worker secret.
+- **Streaming:** the Ask streams its answer stage by stage; checked through the VM's endpoint, it isn't buffered. A fresh Ask takes 15–35 s, and Cloudflare cuts requests at 100 s.

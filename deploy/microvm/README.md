@@ -1,13 +1,14 @@
 # Dialectic on a MicroVM
 
-The preserved public copy of Dialectic: one container on a DigitalOcean MicroVM that pauses when nobody is using it, replacing the hackathon droplet's three copies (`DEPLOY.md`). A Cloudflare Worker in front of it comes later; this folder is only the image.
+The preserved public copy of Dialectic: one container on a DigitalOcean MicroVM that pauses when nobody is using it, replacing the hackathon droplet's three copies. The Cloudflare Worker in front of it is in `../worker/`; how the pieces fit, and the everyday commands, are in `DEPLOY.md`. This folder is the image.
 
 | File | What it does |
 | --- | --- |
 | `Dockerfile` | Node stage builds `app/frontend/dist`; Python 3.12 + uv installs the backend from `uv.lock`. No OCR packages. Same layout as a checkout, under `/app` |
 | `entrypoint.sh` | PID 1: seeds on first boot, runs uvicorn on `$PORT` (8080), restarts it if it dies, reseeds daily when quiet. Never exits |
 | `guard.py` | Wraps `main:app` and refuses `POST /api/sources` (server fetches any URL) and `POST /api/readings` (uploads, unless `UPLOADS_ENABLED=1`), the jobs Caddy did on the droplet. Since the `harden-public` merge the app does both itself, so this is a second layer |
-| `build.sh` | Builds from a `git archive` of HEAD plus the prepared database; `--push` pushes to `ghcr.io/owyaggy/dialectic` |
+| `build.sh` | Builds from a `git archive` of HEAD plus the prepared database; `--push` pushes to `ghcr.io/owyaggy/dialectic` (public: DigitalOcean can't pull private images) |
+| `carry-state.py` | Copies a running VM's `spend` and `web_cache` into the prepared database, before building the next image |
 
 ## Build and try it locally
 
@@ -25,10 +26,10 @@ All from the environment (`doctl compute microvm create --env KEY=value …`). I
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `DO_INFERENCE_KEY` | none | A model access key just for this copy, with a low monthly spend threshold |
+| `DO_INFERENCE_KEY` | none | A model access key just for this copy. It's from Owen's Main team: the Dialectic team's account tier has no Claude models (403 "not available for your subscription tier") |
 | `DO_INFERENCE_URL`, `DO_MODEL` | as in `.env.example` | |
 | `KAGI_API_KEY` | none | |
-| `AI_BUDGET_USD`, `SEARCH_BUDGET_USD` | `0` (nothing paid) | **Lifetime totals** over the `spend` table, which starts at $0.0284 AI / $0.012 search. So `AI_BUDGET_USD=3` allows about $2.97 more, ever |
+| `AI_BUDGET_USD`, `SEARCH_BUDGET_USD` | `0` (nothing paid) | **Lifetime totals** over the `spend` table, which the image carries from VM to VM (*The database*). So `AI_BUDGET_USD=3` is $3 ever, across every VM |
 | `DEVICE_ASKS_PER_HOUR` | `5` | Paid Asks per device per hour |
 | `AI_OFF` | `0` | `1` blocks every paid call; cached replays still work |
 | `UPLOADS_ENABLED` | `0` | Leave off: no OCR in the image |
@@ -39,9 +40,9 @@ All from the environment (`doctl compute microvm create --env KEY=value …`). I
 
 The image carries the prepared database as `/app/seed.db`: the demo copy's database from the hackathon droplet (clean seeded state, its `spend`), plus every `web_cache` row from the sandbox and dev copies that demo didn't have (173 rows in all). `build.sh` takes it from `~/code/tri-co_hack_2026-archive/microvm-seed/dialectic.db` (override with `SEED_DB=`). It holds fetched web pages and cached AI answers, so the image shares those with anyone who can pull it.
 
-On first boot, the entrypoint copies it to `app/backend/dialectic.db` and runs `seed.py --reset --with-reading`, which rebuilds the seed (PDF paths included) and keeps `web_cache` and `spend`. The database and `uploads/` then live on the VM's disk, which survives pause and resume. **A new image means a new VM, which starts again from `seed.db`:** to keep the spend and any newly cached answers, copy the VM's `dialectic.db` out first and build the next image with it as `SEED_DB`.
+On first boot, the entrypoint copies it to `app/backend/dialectic.db` and runs `seed.py --reset --with-reading`, which rebuilds the seed (PDF paths included) and keeps `web_cache` and `spend`. The database and `uploads/` then live on the VM's disk, which survives pause and resume. **A new image means a new VM, which starts again from `seed.db`:** to keep the spend and any newly cached answers, run `carry-state.py <vm id>` before `build.sh`.
 
-The daily reseed (or one that's overdue when the VM resumes) waits for `RESEED_QUIET_SECONDS` with no requests, then stops uvicorn for about 30 s while it runs.
+The daily reseed (or one that's overdue when the VM resumes) waits until two checks 30 s apart both find no request for `RESEED_QUIET_SECONDS` (two, so the request that resumed the VM has time to be logged), then stops uvicorn for about 30 s while it runs. The app's GETs retry through that.
 
 ## Operating it
 
