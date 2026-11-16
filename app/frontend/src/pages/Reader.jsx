@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { Document, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/TextLayer.css';
-import { askStream, del, get, patch, pdfFile, post } from '../api.js';
+import { askStream, del, get, patch, pdfFile, post, sessionEnded } from '../api.js';
 import PdfPage, { hits, overlayStyle, rangeToRects } from '../components/PdfPage.jsx';
 import Margin from '../components/Margin.jsx';
 import Composer from '../components/Composer.jsx';
@@ -20,6 +20,10 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.m
 const PDF_OPTIONS = { isEvalSupported: false };
 
 const POLL_MS = 5000;           // how often the margin refreshes while the tab is visible (SPEC §3.3)
+// No polling after this long without a mouse move, key, scroll or touch: the public copy's server
+// pauses (and stops costing) only once nothing has asked it anything for 15 min. Any input refreshes at once.
+const IDLE_MS = 5 * 60 * 1000;
+const INPUT_EVENTS = ['mousemove', 'mousedown', 'keydown', 'wheel', 'scroll', 'touchstart'];
 const START_SCALE = 1.3;
 const ZOOM_STEP = 0.1;
 const MIN_SCALE = 0.6;
@@ -56,6 +60,8 @@ export default function Reader() {
   const pageRefs = useRef({});
   const cardRefs = useRef({});
   const scrolledToStart = useRef(false);
+  const lastInput = useRef(Date.now());
+  const polling = useRef(false);   // a poll is in flight (it may be waiting for the server to wake)
 
   // The PDF request needs our X-User-Id; keep the same object so react-pdf doesn't reload.
   const file = useMemo(() => pdfFile(id), [id]);
@@ -73,22 +79,65 @@ export default function Reader() {
     loadAnnotations();
   }, [id, loadAnnotations]);
 
-  // Live updates: poll while the tab is visible, and refresh on focus.
+  // Live updates: poll while the tab is visible and someone's there (IDLE_MS), and refresh at once
+  // on focus or on the first input after a pause. Stops for good when the demo pass runs out.
   useEffect(() => {
     function tick() {
-      const visible = document.visibilityState === 'visible';
-      setLive(visible);
-      if (visible) loadAnnotations();
+      const idle = Date.now() - lastInput.current >= IDLE_MS;
+      const on = document.visibilityState === 'visible' && !idle && !sessionEnded();
+      setLive(on);
+      if (!on || polling.current) return;
+      polling.current = true;
+      loadAnnotations().finally(() => { polling.current = false; });
+    }
+    function onInput() {
+      const wasIdle = Date.now() - lastInput.current >= IDLE_MS;
+      lastInput.current = Date.now();
+      if (wasIdle) tick();
+    }
+    function onFocus() {
+      if (document.visibilityState === 'visible') lastInput.current = Date.now();
+      tick();
     }
     const timer = setInterval(tick, POLL_MS);
-    window.addEventListener('focus', tick);
-    document.addEventListener('visibilitychange', tick);
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    INPUT_EVENTS.forEach((name) => window.addEventListener(name, onInput, { capture: true, passive: true }));
     return () => {
       clearInterval(timer);
-      window.removeEventListener('focus', tick);
-      document.removeEventListener('visibilitychange', tick);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+      INPUT_EVENTS.forEach((name) => window.removeEventListener(name, onInput, { capture: true }));
     };
   }, [loadAnnotations]);
+
+  // The PDF and pdf.js's worker script are fetched outside api.js, and pdf.js remembers a worker that
+  // failed to load, so a server that was waking up leaves the reader stuck. Wait for the server
+  // (api.js retries), then reload the page once: nothing's lost, the reading never showed.
+  async function onPdfError(e) {
+    const reloadedKey = `dialectic_pdf_reload_${id}`;
+    if (sessionEnded()) return;
+    if (sessionStorage.getItem(reloadedKey)) {
+      sessionStorage.removeItem(reloadedKey); // reloading didn't help: a real error
+      setError(e);
+      return;
+    }
+    try {
+      await get(`/readings/${id}`);
+    } catch {
+      setError(e);
+      return;
+    }
+    sessionStorage.setItem(reloadedKey, '1');
+    window.location.reload();
+  }
+
+  // A 404 for a note or question that's gone (deleted by someone, or the public copy's daily reseed
+  // wiped it): just refresh the margin. Anything else is shown.
+  function goneOrError(e) {
+    if (e.status === 404) loadAnnotations();
+    else setError(e);
+  }
 
   // ---------- scrolling: which page is current ----------
 
@@ -238,7 +287,7 @@ export default function Reader() {
       await post(`/readings/${id}/annotations`, { parent_id: parent.id, body });
       await loadAnnotations();
     } catch (e) {
-      setError(e);
+      goneOrError(e);
     }
   }
 
@@ -248,7 +297,7 @@ export default function Reader() {
       await del(`/annotations/${annotation.id}`);
       await loadAnnotations();
     } catch (e) {
-      setError(e);
+      goneOrError(e);
     }
   }
 
@@ -257,7 +306,7 @@ export default function Reader() {
       await patch(`/annotations/${annotation.id}`, { share_with_future: shareWithFuture });
       await loadAnnotations();
     } catch (e) {
-      setError(e);
+      goneOrError(e);
     }
   }
 
@@ -286,7 +335,7 @@ export default function Reader() {
       setAnswer({ ...savedAnswer({ page: question.page, rects: question.rects, question: question.body, questionId: question.id, result }), showAi });
       scrollToPage(question.page);
     } catch (e) {
-      setError(e);
+      goneOrError(e);
     }
   }
 
@@ -326,7 +375,7 @@ export default function Reader() {
         <Link to="/" className="wordmark">Dialectic</Link>
         <span className="breadcrumb"><Link to="/">Readings</Link> › {reading?.title || '…'}</span>
         <div className="spacer" />
-        <span className="live" title={`Refreshes every ${POLL_MS / 1000} s while this tab is open`}>
+        <span className="live" title={`Refreshes every ${POLL_MS / 1000} s while this tab is open; pauses after ${IDLE_MS / 60000} min without input`}>
           <span className={`live-dot${live ? '' : ' paused'}`} />Live
         </span>
         <div className="zoom">
@@ -338,7 +387,7 @@ export default function Reader() {
         <UserMenu showName={false} />
       </header>
 
-      {error && <div style={{ padding: '12px 28px 0' }}><ErrorNotice error={error} /></div>}
+      {error && !error.sessionEnded && <div style={{ padding: '12px 28px 0' }}><ErrorNotice error={error} /></div>}
 
       <div className="reader-body">
         <div className="pdf-wrap">
@@ -375,8 +424,8 @@ export default function Reader() {
           <Document
             file={file}
             options={PDF_OPTIONS}
-            onLoadSuccess={(pdf) => setPageCount(pdf.numPages)}
-            onLoadError={setError}
+            onLoadSuccess={(pdf) => { setPageCount(pdf.numPages); sessionStorage.removeItem(`dialectic_pdf_reload_${id}`); }}
+            onLoadError={onPdfError}
             loading={<div className="pdf-status">Loading the reading…</div>}
             error={<div className="pdf-status">Couldn't load the PDF.</div>}
           >
