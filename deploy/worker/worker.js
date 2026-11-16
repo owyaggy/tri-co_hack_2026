@@ -119,6 +119,10 @@ async function proxy(request, env, url) {
   const headers = new Headers(request.headers);
   headers.delete("Cookie"); // the app uses headers, not cookies; the pass stays here
   headers.delete("Authorization");
+  // DO's endpoint strips X-User-Id before the VM sees it; guard.py in the image renames this back.
+  const userId = headers.get("X-User-Id");
+  headers.delete("X-User-Id");
+  if (userId) headers.set("X-Dialectic-User-Id", userId);
   headers.set("Authorization", `Bearer ${env.DO_TOKEN}`);
   headers.set("Host", env.VM_HOST);
   const target = `https://${env.VM_HOST}${url.pathname}${url.search}`;

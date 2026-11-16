@@ -29,8 +29,21 @@ def refusal(path, method):
     return None
 
 
+def user_header(scope):
+    """DO's MicroVM endpoint strips X-User-Id (and Cookie, Authorization) before the request
+    reaches the VM, so the front door Worker sends it as X-Dialectic-User-Id; turn it back into
+    the X-User-Id the app reads. This gives a client nothing new: X-User-Id was always free to set."""
+    headers = scope["headers"]
+    renamed = [v for k, v in headers if k == b"x-dialectic-user-id"]
+    if not renamed:
+        return scope
+    headers = [(k, v) for k, v in headers if k not in (b"x-user-id", b"x-dialectic-user-id")]
+    return {**scope, "headers": headers + [(b"x-user-id", renamed[0])]}
+
+
 async def app(scope, receive, send):
     if scope["type"] == "http":
+        scope = user_header(scope)
         detail = refusal(scope["path"], scope["method"])
         if detail:
             body = json.dumps({"detail": detail}).encode()
